@@ -27,11 +27,83 @@ import re
 import sys
 import zipfile
 
+ASCII_ONLY = False
 ATTR_RX = re.compile(r"(?im)^\s*Attribute\b")
 VIEW_RX = re.compile(r"<workbookView\b[^>]*>")
 HIDDEN_RX = re.compile(r'visibility\s*=\s*"hidden"')
 LOADER_RX = re.compile(r"(?im)^\s*(Private\s+|Public\s+)?Sub\s+(Workbook_Open|Auto_Open)\b")
 MACRO_EXTS = (".xlsm", ".xltm", ".xlam")
+
+# 未限定引用：窗口隐藏（没有活动工作簿）时，"裸"写法的对象引用会失败。
+# 这些引用都经由 VBA 的 _Global 解析，而 _Global 依赖"当前活动的那个工作簿/工作表"。
+UNQUALIFIED = [
+    (re.compile(r"(?<!\.)\bSheets\s*\("), "Sheets("),
+    (re.compile(r"(?<!\.)\bWorksheets\s*\("), "Worksheets("),
+    (re.compile(r"(?<!\.)\bRange\s*\("), "Range("),
+    (re.compile(r"(?<!\.)\bCells\s*\("), "Cells("),
+    (re.compile(r"(?<!\.)\bColumns\s*\("), "Columns("),
+    (re.compile(r"(?<!\.)\bRows\s*\("), "Rows("),
+    (re.compile(r"(?<!\.)\bSelection\b"), "Selection"),
+    (re.compile(r"(?<!\.)\bWindows\s*\("), "Windows("),
+    (re.compile(r"(?<!\.)\bWorkbooks\s*\("), "Workbooks("),
+    (re.compile(r"\bActiveSheet\b"), "ActiveSheet"),
+    (re.compile(r"\bActiveWorkbook\b"), "ActiveWorkbook"),
+    (re.compile(r"\bActiveWindow\b"), "ActiveWindow"),
+    (re.compile(r"\bApplication\s*\.\s*(?:Sheets|Worksheets|Range|Cells|ActiveSheet|ActiveWorkbook)\b"),
+     "Application.xxx（同样依赖活动工作簿）"),
+]
+
+
+def _setup_stdio(ascii_only=False):
+    """输出永不崩：Windows 控制台可能是 cp936/cp932，打印 ⚠ ✅ 会把整个程序打挂
+    （屏幕上正常，一旦 `> out.txt` 或 `| Select-String` 就崩）。--ascii 时退化为纯 ASCII。"""
+    enc = "ascii" if ascii_only else "utf-8"
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding=enc, errors="replace")
+        except Exception:
+            pass
+
+
+def code_only(src):
+    """剥掉注释与字符串字面量，只留真正的代码（避免把注释里的字样算成真调用）。"""
+    out = []
+    for line in src.splitlines():
+        if re.match(r"(?i)^\s*rem\b", line):
+            out.append("")
+            continue
+        buf, i, n, in_str = [], 0, len(line), False
+        while i < n:
+            ch = line[i]
+            if in_str:
+                if ch == '"':
+                    if i + 1 < n and line[i + 1] == '"':
+                        i += 2
+                        continue
+                    in_str = False
+                i += 1
+                continue
+            if ch == '"':
+                in_str = True
+                buf.append(" ")
+                i += 1
+                continue
+            if ch == "'":
+                break
+            buf.append(ch)
+            i += 1
+        out.append("".join(buf))
+    return "\n".join(out)
+
+
+def find_unqualified(code):
+    """返回 [(行号, 命中文本)]。"""
+    hits = []
+    clean = code_only(code)
+    for rx, what in UNQUALIFIED:
+        for m in rx.finditer(clean):
+            hits.append((clean[:m.start()].count("\n") + 1, what))
+    return sorted(set(hits))
 
 
 # --------------------------------------------------------------------------- 静态
@@ -123,15 +195,9 @@ def com_diagnose(path, name_hint=None):
               .get(stat, "未知（非 zip 或读不到）"))
 
         hidden = info["window_visible"] is False or info["active_workbook"] is None
+        info["hidden"] = hidden
         if hidden:
-            wb_name = name_hint or getattr(wb, "Name", "<工作簿名>")
-            findings.append(
-                "窗口隐藏 -> ActiveWorkbook 为 None -> 裸宏名必然解析失败。\n"
-                "      注意：装载器/宿主工作簿**故意**隐藏窗口是常见设计，属于设计而非故障，"
-                "不要为此改造文件。\n"
-                "      处置：自动化侧用限定名 \"%s!宏名\"（run_vba.py 已会自动补）；"
-                "宏名本身正确即可，无需其他改动。" % wb_name)
-            print("    -> ⚠ 窗口隐藏（裸宏名会失败；可能是设计，见结论）")
+            print("    -> ⚠ 窗口隐藏（裸宏名会失败；宏内部未限定的引用也会失败，见结论）")
         else:
             print("    -> 窗口可见、有活动工作簿，裸宏名解析正常。")
 
@@ -173,7 +239,7 @@ def com_diagnose(path, name_hint=None):
         if info["broken_refs"]:
             findings.append("存在坏引用 %s -> 取消勾选或修复后工程才能编译。" % info["broken_refs"])
 
-        print("\n[5] 组件 + Attribute 行 + 装载入口扫描")
+        print("\n[5] 组件 + Attribute 行 + 装载入口 + 未限定引用扫描")
         try:
             kind_map = {1: "标准模块", 2: "类模块", 3: "窗体", 100: "文档"}
             for i in range(1, vbp.VBComponents.Count + 1):
@@ -186,18 +252,23 @@ def com_diagnose(path, name_hint=None):
                     n, code = -1, ""
                 lines = code.splitlines()
                 hits = [k + 1 for k in range(len(lines)) if ATTR_RX.match(lines[k])]
+                unq = find_unqualified(code)
                 is_loader = bool(LOADER_RX.search(code))
                 if hits:
                     info["attr_modules"].append({"module": str(c.Name), "lines": hits})
+                if unq:
+                    info.setdefault("unqualified", []).extend(
+                        [{"module": str(c.Name), "line": ln, "what": w} for ln, w in unq])
                 if is_loader:
                     info["loader"] = True
                 info["components"].append({"module": str(c.Name),
                                            "type": kind_map.get(c.Type, str(c.Type)),
                                            "lines": n})
-                print("    %-28s %-8s lines=%-5s %s%s" % (
+                print("    %-28s %-8s lines=%-5s %s%s%s" % (
                     c.Name, kind_map.get(c.Type, str(c.Type)), n,
                     "<== Attribute 行 @%s" % hits if hits else "",
-                    "  <== 有 Workbook_Open/Auto_Open（装载器入口）" if is_loader else ""))
+                    "  <== 装载入口" if is_loader else "",
+                    "  <== 未限定引用 %d 处" % len(unq) if unq else ""))
         except Exception as e:  # noqa: BLE001
             print("    读取失败:", e)
         if info["attr_modules"]:
@@ -205,6 +276,28 @@ def com_diagnose(path, name_hint=None):
                 "以下模块含 Attribute 行（只在导出的 .bas 里合法，当源码注入会编译失败，"
                 "并拖垮整个工程）: %s -> 剥掉；坏模块必须**就地覆写或删除**。"
                 % info["attr_modules"])
+
+        if info.get("hidden"):
+            wb_name = name_hint or getattr(wb, "Name", "<工作簿名>")
+            if info.get("loader"):
+                why = "本工作簿含 Workbook_Open/Auto_Open（打开即跑），隐藏窗口**很可能是有意设计**。"
+            else:
+                why = ("未发现「打开即跑」的入口，**无法断定**隐藏窗口是有意设计还是历史遗留"
+                       "（例如用过「视图→隐藏」后保存）；两种情况的处置方式相同。")
+            findings.append(
+                "窗口隐藏 -> 没有「活动工作簿」-> \n"
+                "      ① 外部用裸宏名调用必然失败；② 宏**内部**未限定的 Sheets/Range/Cells/ActiveSheet 也会失败。\n"
+                "      " + why + "\n"
+                "      处置：外部一律用限定名 \"%s!宏名\"（run_vba.py 已自动补）；"
+                "脚本内部一律写 ThisWorkbook.Worksheets(...)；**不要为迁就去改造该文件**。" % wb_name)
+
+        if info.get("unqualified"):
+            sample = "、".join("%s:%d(%s)" % (u["module"], u["line"], u["what"])
+                              for u in info["unqualified"][:10])
+            findings.append(
+                "发现 %d 处**未限定引用**（窗口隐藏时必失败；窗口可见时也可能因「活动对象不是你以为的那个」而出错）: %s"
+                " -> 改成 ThisWorkbook.Worksheets(\"表名\") 或显式的工作簿/工作表变量。"
+                % (len(info["unqualified"]), sample))
 
         print("\n" + "=" * 78)
         if findings:
@@ -236,7 +329,9 @@ def main():
                                  description="只读诊断 Excel VBA 跑不起来的原因（窗口隐藏 / Attribute / 坏引用）")
     ap.add_argument("path", help=".xlsm/.xltm 文件，或一个目录（目录只做静态扫描）")
     ap.add_argument("--json", action="store_true", help="额外输出 JSON 摘要")
+    ap.add_argument("--ascii", action="store_true", help="输出只用 ASCII 字符（任何终端都不乱码/不崩）")
     args = ap.parse_args()
+    _setup_stdio(bool(args.ascii))
 
     path = os.path.abspath(args.path)
     if not os.path.exists(path):

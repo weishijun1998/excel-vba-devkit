@@ -33,6 +33,7 @@
 """
 import argparse
 import json
+import locale
 import os
 import re
 import subprocess
@@ -59,8 +60,98 @@ DANGEROUS = [
     (re.compile(r"\.\s*Show\b"), "UserForm/.Show（模态窗口=挂死）"),
 ]
 
+# ---- 通用能力①：输出永不崩 -------------------------------------------------
+# Windows 控制台默认编码可能是 cp936/cp932 等；此时打印 ⚠ ✅ 这类符号会抛
+# UnicodeEncodeError。屏幕上看着正常，一旦 `> out.txt` 或 `| Select-String`
+# 就整个崩掉（极难排查），所以这里固定 UTF-8 + errors=replace。
+ASCII_MAP = {"✅": "[OK]", "❌": "[FAIL]", "⚠": "[!]", "⛔": "[BLOCK]",
+             "↻": "[retry]", "ℹ": "[i]", "•": "-", "–": "-", "…": "..."}
+ASCII_ONLY = False
+
+
+def _setup_stdio():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+# ---- 通用能力②：源码编码自动识别 -------------------------------------------
+# VBA 导出的 .bas/.frm/.cls 编码取决于导出环境：新版 UTF-8(常带 BOM)、
+# 老版中文 GBK(CP936)、日文 CP932、西欧 CP1252。只认 UTF-8 会让这些文件
+# 直接读不了（UnicodeDecodeError）。顺序：显式指定 > BOM > UTF-8 > 系统 ANSI > 常见候选。
+ANSI_CANDIDATES = ("cp936", "cp932", "cp949", "cp1252", "latin-1")
+
+
+def read_source(path, forced=None):
+    """读源码文件 → (文本, 实际使用的编码)。"""
+    with open(path, "rb") as f:
+        raw = f.read()
+    if forced:
+        return raw.decode(forced), forced
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig"), "utf-8-sig"
+    order = ["utf-8"]
+    try:
+        pref = locale.getpreferredencoding(False)
+        if pref and pref.lower().replace("-", "") not in ("utf8",):
+            order.append(pref)
+    except Exception:
+        pass
+    order += [c for c in ANSI_CANDIDATES if c not in order]
+    last = None
+    for enc in order:
+        try:
+            return raw.decode(enc), enc
+        except (UnicodeDecodeError, LookupError) as e:
+            last = e
+    raise last
+
+
+# ---- 通用能力③：只听"正事"，不被注释/字符串误伤 ----------------------------
+def code_only(src):
+    """剥掉注释与字符串字面量，只留真正的代码。
+
+    为什么需要：注释里写一句 `' 千万别用 Me.Show`、或字符串里写 "(Me.Show 0)"
+    都不是真的调用，不该被危险语句拦截器误伤（假阳性会白白折腾一轮）。
+    规则：双引号内整体丢弃（"" 视为转义的一个引号）；行内 ' 之后丢弃；
+    行首 Rem 之后丢弃。够用即止，不追求完整词法分析。
+    """
+    out = []
+    for line in src.splitlines():
+        if re.match(r"(?i)^\s*rem\b", line):
+            out.append("")
+            continue
+        buf, i, n, in_str = [], 0, len(line), False
+        while i < n:
+            ch = line[i]
+            if in_str:
+                if ch == '"':
+                    if i + 1 < n and line[i + 1] == '"':
+                        i += 2
+                        continue
+                    in_str = False
+                i += 1
+                continue
+            if ch == '"':
+                in_str = True
+                buf.append(" ")        # 占位，避免两侧 token 粘连
+                i += 1
+                continue
+            if ch == "'":
+                break
+            buf.append(ch)
+            i += 1
+        out.append("".join(buf))
+    return "\n".join(out)
+
 
 def log(msg):
+    if ASCII_ONLY:
+        for k, v in ASCII_MAP.items():
+            msg = msg.replace(k, v)
+        msg = msg.encode("ascii", "replace").decode("ascii")
     print(msg, flush=True)
 
 
@@ -187,13 +278,22 @@ def main():
     ap.add_argument("--allow-unsafe", action="store_true", help="放行危险语句（默认拒绝）")
     ap.add_argument("--report", default=None, help="JSON 报告输出路径")
     ap.add_argument("--no-guard", action="store_true", help="不挂守卫（不推荐）")
+    ap.add_argument("--encoding", default=None,
+                    help="源码文件编码（默认自动识别：BOM→UTF-8→系统ANSI→cp936/cp932/cp949/cp1252）")
+    ap.add_argument("--cleanup", action="store_true",
+                    help="结束前移除本次注入的模块（处理正式工作簿时建议加）")
+    ap.add_argument("--ascii", action="store_true", help="输出只用 ASCII 字符（任何终端都不乱码/不崩）")
     args = ap.parse_args()
+    global ASCII_ONLY
+    ASCII_ONLY = bool(args.ascii)
+    _setup_stdio()
 
     wb_path = os.path.abspath(args.workbook)
     report = {"workbook": wb_path, "macro": args.run, "verdict": None, "run_return": None,
               "elapsed_s": None, "error": None, "guard": [], "assertions": [], "code_scan": [],
               "reused_instance": False, "saved": False, "excel_alive": None,
-              "run_name": None, "run_name_qualified": None, "run_retried_qualified": False}
+              "run_name": None, "run_name_qualified": None, "run_retried_qualified": False,
+              "presaved": False, "cleaned_modules": None, "left_modules": None}
     problems = []
 
     # ---- 1) 读代码 + 剥 Attribute + 静态检查 ----
@@ -209,18 +309,28 @@ def main():
         if not os.path.exists(path):
             log("✗ 代码文件不存在: %s" % path)
             return 2
-        with open(path, encoding="utf-8") as f:
-            raw = f.read().replace("\r\n", "\n").replace("\n", "\r\n")
-        hits = []
-        for rx, why in DANGEROUS:
-            if rx.search(raw):
-                hits.append(why)
-        report["code_scan"].append({"module": mod, "file": path, "dangerous": hits})
+        try:
+            raw_text, enc = read_source(path, args.encoding)
+        except UnicodeDecodeError as e:
+            log("✗ 读不了源码文件（编码识别失败）: %s" % e)
+            log("  → 用 --encoding 指定编码，例如 --encoding gbk / cp932 / utf-8-sig")
+            return 2
+        if enc not in ("utf-8", "utf-8-sig"):
+            log("ℹ 源码编码识别为 %s（非 UTF-8）: %s" % (enc, os.path.basename(path)))
+        raw = raw_text.replace("\r\n", "\n").replace("\n", "\r\n")
         clean = STRIP_ATTR.sub("", raw)
+        code = code_only(clean)                  # 只听"正事"：注释/字符串不算
+        hits = [why for rx, why in DANGEROUS if rx.search(code)]
+        raw_hits = [why for rx, why in DANGEROUS if rx.search(clean)]
+        report["code_scan"].append({"module": mod, "file": path, "encoding": enc,
+                                    "dangerous": hits,
+                                    "dangerous_in_comments_only": sorted(set(raw_hits) - set(hits))})
         if STRIP_ATTR.search(raw):
             report["code_scan"][-1]["stripped_attribute_lines"] = len(STRIP_ATTR.findall(raw))
         if hits and not args.allow_unsafe:
             problems.append("模块 %s 含危险语句: %s" % (mod, "、".join(hits)))
+        elif raw_hits and not hits:
+            log("ℹ 危险字样只出现在注释/字符串里 → 放行: %s" % "、".join(sorted(set(raw_hits))))
         modules[mod] = clean
     if problems:
         log("⛔ 拒绝注入（用 --allow-unsafe 可强制，但很可能挂死）：")
@@ -264,6 +374,16 @@ def main():
     log("Excel: %s | pid=%s | 工作簿=%s" % ("复用已开实例" if report["reused_instance"] else "新建实例",
                                            xl_pid, wb.Name))
 
+    # ---- 2.5) 先保存"用户数据"，再注入 ----
+    # 顺序很关键：保存放在注入之前，测试模块就不会被动写进磁盘。
+    # （原来放在注入之后 → 即使不加 --save，注入的模块也会被写进用户文件）
+    try:
+        wb.Save()
+        report["saved"] = True
+        report["presaved"] = True
+    except Exception as e:
+        log("⚠ 运行前保存失败: %r" % (e,))
+
     # ---- 3) 注入 ----
     for mod, code in modules.items():
         inject(wb.VBProject, mod, code)
@@ -279,12 +399,7 @@ def main():
             encoding="utf-8", errors="replace")
         time.sleep(0.6)          # 预热，确保 Run 之前已在扫描
 
-    # ---- 5) 运行前保存（被杀也能从磁盘继续）----
-    try:
-        wb.Save()
-        report["saved"] = True
-    except Exception as e:
-        log("⚠ 运行前保存失败: %r" % (e,))
+    # ---- 5) 运行前保存已上移到 2.5（放在注入之前，避免测试模块被动写盘）----
 
     # ---- 6) 运行 ----
     t0 = time.time()
@@ -438,12 +553,25 @@ def main():
             if not ok:
                 fails.append(spec)
 
-    # ---- 9) 保存/收尾 ----
+    # ---- 9) 清理 / 保存 / 收尾 ----
     if prev_enable_events is not None:
         try:
             xl.EnableEvents = prev_enable_events      # 复用实例时把事件开关还原，别留在用户会话里
         except Exception:
             pass
+    injected = list(modules.keys())
+    if args.cleanup and report["excel_alive"]:
+        removed = []
+        for mod in injected:
+            try:
+                wb.VBProject.VBComponents.Remove(wb.VBProject.VBComponents(mod))
+                removed.append(mod)
+            except Exception:
+                pass
+        report["cleaned_modules"] = removed
+        log("已移除本次注入的模块: %s" % ("、".join(removed) or "（无）"))
+    else:
+        report["left_modules"] = injected
     if args.save and report["excel_alive"]:
         try:
             wb.Save()
@@ -453,7 +581,7 @@ def main():
     if not args.keep_open and report["excel_alive"] and not report["reused_instance"]:
         try:
             try:
-                wb.Close(True)
+                wb.Close(bool(args.save))     # 说好不存就不存（原来是无条件 Close(True)，会静默写入测试模块）
             except Exception:
                 pass
             xl.Quit()
@@ -502,6 +630,9 @@ def main():
         summary = "断言未通过 ❌（%d 条）" % len(fails)
     log("")
     log("=== 总结: %s ===" % summary)
+    if report.get("left_modules"):
+        log("注意: 本工作簿现留有以下测试模块: %s（加 --cleanup 可在结束后自动移除）"
+            % "、".join(report["left_modules"]))
     report["ok"] = ok_all
     _write_report(args, report)
     return 0 if ok_all else 1

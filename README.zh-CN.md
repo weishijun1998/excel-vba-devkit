@@ -61,8 +61,9 @@ python tools/vba/vba_guard.py <excel_pid> 60  # 单独挂守卫看一个长任�
 
 | 路径 | 作用 |
 |---|---|
-| `tools/vba/run_vba.py` | **开发测试跑道**：剥 Attribute → 危险语句拦截 → 注入 → 守卫 → 运行 → 强制重算 → 断言 → 报告。窗口隐藏的工作簿会**自动改用限定名** |
-| `tools/vba/vba_diagnose.py` | **只读诊断**（宏"跑不起来"时先跑它）：窗口隐藏 / 坏引用 / `Attribute` 行。传文件或**目录**都行——目录模式是纯静态检查，不用开 Excel |
+| `tools/vba/run_vba.py` | **开发测试跑道**：剥 Attribute → 危险语句拦截 → 注入 → 守卫 → 运行 → 强制重算 → 断言 → 报告。窗口隐藏的工作簿会**自动改用限定名**；**源码编码自动识别**（UTF-8/GBK…）；**不加 `--save` 绝不写盘**；`--cleanup` 会移除注入的测试模块 |
+| `tools/vba/vba_diagnose.py` | **只读诊断**（宏"跑不起来"时先跑它）：窗口隐藏 / 坏引用 / `Attribute` 行 / **未限定引用**。传文件或**目录**都行——目录模式是纯静态检查，不用开 Excel |
+| `tools/vba/vba_lint_refs.py` | **静态体检**：逐行列出"未限定引用"（`Sheets(`、`Range(`、`Cells(`、`ActiveSheet`、`ActiveWorkbook`…）——它们会让**所有自动化调用**失败。能读 GBK/UTF-8 源码，不开 Excel |
 | `tools/vba/vba_guard.py` | **守卫**：弹窗点掉（点 id **4800**"结束"按钮）/ 假死判定 / 跑飞判定 / 心跳保护 |
 | `tools/vba/dismiss_vba_dialog.py` | 卡住弹窗一键清理（BM_CLICK → WM_COMMAND → 真实鼠标 → 杀进程） |
 | `tools/vba/vba_attr_probe.py` | Attribute 行探针（复现 `0x800A03EC` 假故障） |
@@ -100,6 +101,9 @@ python tools/vba/vba_guard.py <excel_pid> 60  # 单独挂守卫看一个长任�
 | 报"无法运行宏…可能宏被禁用" | **同一句话两种不相干病因**：(a) 代码里有 `Attribute` 行 —— `run_vba.py` 会自动剥，手写时别带，**不是**信任中心的问题；(b) 工作簿窗口**保存时就是隐藏的**（装载器/宿主工作簿的常见设计，**不要去改造那个文件**）→ Excel 没有活动工作簿，裸宏名解析不到。`run_vba.py` 会自动限定；`vba_diagnose.py` 可一眼分清 |
 | 注入被拒 `⛔ 拒绝注入` | 代码含 `MsgBox`/`InputBox`/`Stop`/`Debug.Assert`/`.Show`（都会挂死自动化实例），改掉或加 `--allow-unsafe` |
 | Excel 被守卫杀了怎么继续 | 运行前已保存工作簿，直接再跑一遍即可（脚本会重新打开） |
+| 读 `.bas` 报 `UnicodeDecodeError` | 你的源码不是 UTF-8（老式中文/日文/西欧导出）。现在会自动识别编码；仍失败就加 `--encoding gbk`（或 `cp932`/`cp1252`） |
+| 运行时中途报 **1004** / **91** | 宏里有"未限定引用"（`Sheets("X")`、`ActiveSheet`…），没有活动工作簿时解析不了。跑 `python tools/vba/vba_lint_refs.py <目录>` 列出来，改成 `ThisWorkbook.Worksheets(...)` |
+| `> out.txt` 之后输出乱/崩 | 非 ASCII 符号撞上非 UTF-8 控制台。工具现已固定 UTF-8 + `errors="replace"`；纯文字终端可加 `--ascii` |
 | 不想每次点"允许运行命令" | VS Code 设置 `chat.tools.terminal.autoApprove` 放行 `python tools/vba/*` |
 | 技能没生效 | 目录名 = `SKILL.md` 的 `name`；确认技能设置已启用；用 Chat 的 **Diagnostics** 排查 |
 | CI 里的 `tools/validate.py` | 会拦下不合规的技能 frontmatter、个人路径与密钥前缀；私有关键词用环境变量 `VBA_KIT_DENYLIST`（逗号分隔）补充，**不要写进仓库** |

@@ -6,22 +6,26 @@
 
 ```bash
 python tools/vba/run_vba.py --workbook <x.xlsm> --code <模块名=文件> --run <宏名> \
-  --expect "cell:表!A1=值" [--expect ...] [--save] [--keep-open] [--visible] [--allow-events]
+  --expect "cell:表!A1=值" [--expect ...] [--save] [--keep-open] [--visible] [--allow-events] \
+  [--cleanup] [--encoding gbk] [--ascii]
 ```
 
-打开工作簿时**默认禁用事件**（`EnableEvents=False`）：装载器/宿主工作簿的 `Workbook_Open` 不会被顺带跑起来；确实想让它触发时加 `--allow-events`。`vba_diagnose.py` 恒禁用事件 —— 诊断绝不该跑用户的程序。
+打开工作簿时**默认禁用事件**（`EnableEvents=False`）：装载器/宿主工作簿的 `Workbook_Open` 不会被顺带跑起来；确实想让它触发时加 `--allow-events`。`vba_diagnose.py` 恒禁用事件 —— 诊断绝不跑用户的程序。
+
+**源码编码自动识别**（BOM → UTF-8 → 系统 ANSI 代码页 → cp936/cp932/cp949/cp1252）：VBA 导出文件在新环境是 UTF-8，**老式中文环境是 GBK/CP936**；`--encoding` 可手动指定。**不加 `--save` 绝不写盘**；`--cleanup` 会在结束前移除注入的测试模块（处理正式工作簿建议加）。终端显示异常时加 `--ascii`。
 
 ## 铁律（每条都对应一次实机事故）
 
 1. **注入前剥掉所有 `Attribute` 行**。`Attribute VB_Name = "X"` 是 VBE 自己的元数据，只在导出的 `.bas` 里合法；当源码注入会让该模块编译失败，**并且拖垮整个工程**（旁边新加的干净模块也跑不了），Excel 报 `0x800A03EC` + "宏可能被禁用" —— 极易误判成宏安全设置。`run_vba.py` 会自动剥；手写注入时要自己剥，且**坏模块必须就地覆写或删除**，旁边加新模块无效。
 2. **工作簿窗口隐藏是"设计"而不是"故障"，但它会吐出那句一模一样的报错**。装载器/宿主类工作簿（打开就跑程序、不让用户被这个簿子干扰）通常保存为 `wb.Windows(1).Visible = False`。这时 Excel **没有活动工作簿**（`xl.ActiveWorkbook is None`），而 `Run "裸宏名"` 是拿"活动工作簿"解析的 → 必然失败，报文与铁律 1 **一字不差**（`0x800A03EC` +「无法运行…可能所有宏都被禁用」）。**不要为了迁就去改造这个文件**：自动化侧一律用限定名 `"工作簿名!宏名"`。`run_vba.py` 会检测隐藏态并自动限定；若裸名失败还会自动重试限定名。任意文件可用 `tools/vba/vba_diagnose.py` 查（静态检查，不需要开 Excel）。注意这个状态**会通过「另存为」传染** —— 一个文件隐藏，它的后代全隐藏。
-3. **代码里禁止 `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / UserForm `.Show`**。都会让自动化实例**挂死**（`Stop`/`Debug.Assert` 最隐蔽：把 VBE 拉进断点模式，**无弹窗、纯假死**）。`run_vba.py` 注入前静态拦截。
-4. **每个宏都加兜底**：`On Error GoTo EH`，EH 里把 `Err.Number & ": " & Err.Description` 写进单元格，并追加一行到日志文件（`Open ... For Append`）。这是"没有弹窗时"唯一的错因来源。读日志文件用 `encoding="gbk"`（ANSI 写入）。
-5. **运行前保存**（`run_vba.py` 默认做）。这样守卫判定卡死而杀进程时，只损失一次重开会话，不是未保存内容全丢。
-6. **性能**：数据先在数组里算好、**一次性写回区域**；关 `ScreenUpdating`、`Calculation = xlCalculationManual`（结束前恢复）；能靠公式/SUMIF/透视表的不用 VBA 循环。
+3. **宏**内部**的每一次对象引用都要限定 —— 同一个「窗口隐藏」还有第二张面孔。** `Sheets("X")`、`Range("A1")`、`Cells(...)`、`ActiveSheet`、`ActiveWorkbook` 都要经 VBA 的 `_Global` 解析，而 `_Global` 需要**活动的**工作簿/工作表。没有活动工作簿（隐藏窗口的装载器）时：`Sheets("X")` 报运行时错误 **1004「方法 'Sheets' 作用于对象 '_Global' 时失败」**；`Set ws = ActiveSheet` **不报错**但得到 `Nothing`，错误要等到**下一行真正用到 ws** 时才出（**91**）。手工跑永远正常 —— 这正是这类地雷能潜伏多年的原因，而**任何自动化调用都会失败**。一律写 `ThisWorkbook.Worksheets("X")` 或显式的工作簿/工作表变量；整仓扫描用 `python tools/vba/vba_lint_refs.py <目录或文件>`（静态只读，能读 GBK/UTF-8 源码）。
+4. **代码里禁止 `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / UserForm `.Show`**。都会让自动化实例**挂死**（`Stop`/`Debug.Assert` 最隐蔽：把 VBE 拉进断点模式，**无弹窗、纯假死**）。`run_vba.py` 注入前静态拦截。
+5. **每个宏都加兜底**：`On Error GoTo EH`，EH 里把 `Err.Number & ": " & Err.Description` 写进单元格，并追加一行到日志文件（`Open ... For Append`）。这是"没有弹窗时"唯一的错因来源。读日志文件用 `encoding="gbk"`（ANSI 写入）。
+6. **运行前保存**（`run_vba.py` 默认做）。这样守卫判定卡死而杀进程时，只损失一次重开会话，不是未保存内容全丢。
+7. **性能**：数据先在数组里算好、**一次性写回区域**；关 `ScreenUpdating`、`Calculation = xlCalculationManual`（结束前恢复）；能靠公式/SUMIF/透视表的不用 VBA 循环。
    - 实测：单次单元格写入 **64 µs**、文件追加 **359 µs**。**逐格循环是宏变慢的头号原因**（10 万次 ≈ 6.4 秒；真实工作簿里 4 万格逐格写 = **2058 ms**），而 VBA 纯计算 300 万次只要 49 ms。同样 4 万格改成数组一次性写回 = **42.7 ms → 48× 提速**，且校验和与闭式解完全一致（是真提速，不是少干活）。
    - 进度/步骤标记只放在**阶段边界**（≤10 处），**绝不放进循环体**。
-7. **宏跑完不等于跑对**：必须写断言回读关键单元格/表/透视表/命名区域。断言数字按数值比较；公式值要在**强制重算后**读（`run_vba.py` 已处理）。
+8. **宏跑完不等于跑对**：必须写断言回读关键单元格/表/透视表/命名区域。断言数字按数值比较；公式值要在**强制重算后**读（`run_vba.py` 已处理）。
 
 ## 失败判定矩阵（`vba_guard.py`）
 
@@ -30,6 +34,7 @@ python tools/vba/run_vba.py --workbook <x.xlsm> --code <模块名=文件> --run 
 | 报错弹窗 | `#32770` 且标题含 `Visual Basic` | 点 id **4800**"结束"按钮（**不要 WM_CLOSE，无效**） | 出现→消失 12–46 ms，Excel 存活 |
 | 「无法运行"X"宏…」**两种不相干的病因** | (a) 某模块含 `Attribute` 行 / 工程编译不过 | (a) 剥掉；坏模块**就地覆写** | 用 `vba_attr_probe.py` 复现 |
 | ↑ 同一句话 | (b) 工作簿窗口保存时**就是隐藏的** → `ActiveWorkbook is None` | (b) **不要动这个文件**，用限定名 `"簿名!宏名"`；`run_vba.py` 已自动处理 | 裸名失败 / 限定名 0.016 s 通过；静态检查不用开 Excel |
+| 运行时错误 **1004**（方法 'Sheets' 作用于对象 '_Global' 时失败）或 **91**，**出现在宏运行中途** | 宏里用了未限定的引用，且当时没有活动工作簿（窗口隐藏） | 一律限定：`ThisWorkbook.Worksheets(...)`；用 `vba_lint_refs.py` 列出所有问题点 | 实测：`Sheets("S1")` → 1004；`Set ws = ActiveSheet` → 拿到 `Nothing`（不报错），**下一行**才失败 |
 | 假死等 IO | 消息泵无响应 + 近 2 秒 CPU≈0 | 超 `hang_after`（默认 6s）杀 | 6.6 s 判 `IDLE_HUNG` |
 | 死循环跑飞 | 消息泵无响应 + CPU 持续 >0.3s/2s | 超硬预算杀 | 20.8 s 判 `RUNAWAY_CPU` |
 | 长任务在推进 | 心跳文件新鲜 | **不杀**，继续等 | 16 s 宏零误杀 |

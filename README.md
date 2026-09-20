@@ -63,8 +63,9 @@ python tools/vba/vba_guard.py <excel_pid> 60  # attach the guard to one long-run
 
 | Path | What it does |
 |---|---|
-| `tools/vba/run_vba.py` | **The dev-test runway**: strip `Attribute` lines → block dangerous statements → inject → guard → run → force recalculation → assert → report. Auto-qualifies the macro name when the workbook window is saved hidden |
-| `tools/vba/vba_diagnose.py` | **Read-only diagnosis** when a macro "cannot run": hidden window / broken references / `Attribute` lines. Takes a file *or a directory* — the directory mode is static and needs no Excel |
+| `tools/vba/run_vba.py` | **The dev-test runway**: strip `Attribute` lines → block dangerous statements → inject → guard → run → force recalculation → assert → report. Auto-qualifies the macro name when the workbook window is saved hidden; auto-detects source encoding (UTF-8 / GBK / …); writes only with `--save`; `--cleanup` removes the injected test modules |
+| `tools/vba/vba_diagnose.py` | **Read-only diagnosis** when a macro "cannot run": hidden window / broken references / `Attribute` lines / unqualified references. Takes a file *or a directory* — the directory mode is static and needs no Excel |
+| `tools/vba/vba_lint_refs.py` | **Static lint**: lists unqualified references (`Sheets(`, `Range(`, `Cells(`, `ActiveSheet`, `ActiveWorkbook`, …) that break every automated call — by file and line. Reads GBK/UTF-8 sources, never opens Excel |
 | `tools/vba/vba_guard.py` | **Guard**: dismiss dialogs (clicks the id **4800** "End" button) / idle-hang verdict / runaway-CPU verdict / heartbeat protection |
 | `tools/vba/dismiss_vba_dialog.py` | One-shot cleanup of stuck dialogs (BM_CLICK → WM_COMMAND → real mouse → kill) |
 | `tools/vba/vba_attr_probe.py` | Attribute-line probe (reproduces the `0x800A03EC` false failure) |
@@ -101,6 +102,9 @@ python tools/vba/vba_guard.py <excel_pid> 60  # attach the guard to one long-run
 | "Cannot run the macro… macros may be disabled" | Two **unrelated** causes share this exact text: (a) the code contains an `Attribute` line — `run_vba.py` strips it, don't hand-write it, and it is **not** a Trust Center problem; (b) the workbook window is **saved hidden** (normal for loader / host workbooks — by design, don't "fix" the file) → Excel has no active workbook, so bare macro names cannot resolve. `run_vba.py` auto-qualifies; `vba_diagnose.py` tells the two apart |
 | `⛔ 拒绝注入` (injection refused) | Code contains `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / `.Show` — all of which hang an automated instance. Remove them or pass `--allow-unsafe` |
 | Guard killed Excel mid-run | The workbook was saved before the run — just run again; the script reopens it |
+| `UnicodeDecodeError` when reading a `.bas` | Your source is not UTF-8 (old Chinese/Japanese/European exports). Encoding is auto-detected now; if it still fails, pass `--encoding gbk` (or `cp932` / `cp1252`) |
+| Runtime error **1004** / **91** *during* the run | Unqualified references (`Sheets("X")`, `ActiveSheet`, …) can't resolve when there is no active workbook. Run `python tools/vba/vba_lint_refs.py <dir>` and qualify them with `ThisWorkbook.Worksheets(...)` |
+| Output looks broken after `> out.txt` | Non-ASCII symbols + a non-UTF-8 console. The tools now force UTF-8 with `errors="replace"`; add `--ascii` for a plain-ASCII terminal |
 | Don't want to approve the command every time | VS Code setting `chat.tools.terminal.autoApprove` for `python tools/vba/*` |
 | Skill not taking effect | Directory name must equal `SKILL.md`'s `name`; check the skill settings are enabled; use Chat **Diagnostics** |
 | CI runs `tools/validate.py` | It fails on bad skill frontmatter and on personal paths / key prefixes. Add private terms via the `VBA_KIT_DENYLIST` env var (comma-separated) — never in the repo |

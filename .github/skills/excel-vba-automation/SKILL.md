@@ -10,8 +10,10 @@ Always run macros through **`tools/vba/run_vba.py`**. Never hand-roll win32com i
 
 ```bash
 python tools/vba/run_vba.py --workbook <x.xlsm> --code <ModuleName=file> --run <MacroName> \
-  --expect "cell:Sheet!A1=value" [--expect ...] [--save] [--keep-open] [--visible]
+  --expect "cell:Sheet!A1=value" [--expect ...] [--save] [--keep-open] [--visible] [--allow-events]
 ```
+
+Workbook events are **disabled by default** (`EnableEvents=False`), so opening a loader / host workbook does **not** run its `Workbook_Open`. Pass `--allow-events` when you actually *want* the workbook's own startup logic to fire. `vba_diagnose.py` always suppresses events — diagnosis must never run the user's program.
 
 ## Hard rules (each one is a real incident)
 

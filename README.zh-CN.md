@@ -45,6 +45,8 @@ python tools/vba/run_vba.py \
 
 退出码：`0` 全过 ｜ `1` 有失败 ｜ `2` 被拦（危险代码）
 
+打开工作簿时**默认禁用事件**（`EnableEvents=False`）—— 装载器工作簿的 `Workbook_Open` **不会**被顺带跑起来；确实想触发时加 `--allow-events`。
+
 ### C. 单独处理"卡住的弹窗 / Attribute 坑"
 
 ```bash

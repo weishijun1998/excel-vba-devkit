@@ -79,6 +79,7 @@ def com_diagnose(path, name_hint=None):
     xl.DisplayAlerts = False
     xl.AutomationSecurity = 1
     xl.Visible = False
+    xl.EnableEvents = False          # 诊断绝不能顺带触发装载器工作簿的 Workbook_Open（打开即跑程序）
     wb = None
     try:
         wb = xl.Workbooks.Open(path)

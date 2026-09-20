@@ -180,6 +180,8 @@ def main():
     ap.add_argument("--hang-after", type=float, default=6, help="无响应多久判假死（默认 6s）")
     ap.add_argument("--hard-budget", type=float, default=45, help="跑飞判定的硬预算（默认 45s）")
     ap.add_argument("--visible", action="store_true", help="Excel 可见（默认隐藏）")
+    ap.add_argument("--allow-events", action="store_true",
+                    help="允许触发工作簿事件（默认禁用：装载器工作簿的 Workbook_Open 不会被顺带跑起来）")
     ap.add_argument("--save", action="store_true", help="运行后保存工作簿")
     ap.add_argument("--keep-open", action="store_true", help="结束后保留 Excel 与工作簿")
     ap.add_argument("--allow-unsafe", action="store_true", help="放行危险语句（默认拒绝）")
@@ -237,10 +239,19 @@ def main():
         report["reused_instance"] = wb is not None
     if xl is None:
         xl = w32.DispatchEx("Excel.Application")
+    prev_enable_events = None
+    try:
+        prev_enable_events = bool(xl.EnableEvents)
+    except Exception:
+        pass
     try:
         xl.DisplayAlerts = False
         xl.AutomationSecurity = 1
         xl.Visible = bool(args.visible)
+        if not args.allow_events:
+            # 装载器/宿主工作簿"一打开就跑程序"：测试工具绝不能顺带把它跑起来
+            xl.EnableEvents = False
+            log("事件已禁用（EnableEvents=False）：打开工作簿不会触发 Workbook_Open；要触发请加 --allow-events")
     except Exception:
         pass
     if wb is None:
@@ -428,6 +439,11 @@ def main():
                 fails.append(spec)
 
     # ---- 9) 保存/收尾 ----
+    if prev_enable_events is not None:
+        try:
+            xl.EnableEvents = prev_enable_events      # 复用实例时把事件开关还原，别留在用户会话里
+        except Exception:
+            pass
     if args.save and report["excel_alive"]:
         try:
             wb.Save()

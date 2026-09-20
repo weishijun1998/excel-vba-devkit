@@ -6,8 +6,10 @@
 
 ```bash
 python tools/vba/run_vba.py --workbook <x.xlsm> --code <模块名=文件> --run <宏名> \
-  --expect "cell:表!A1=值" [--expect ...] [--save] [--keep-open] [--visible]
+  --expect "cell:表!A1=值" [--expect ...] [--save] [--keep-open] [--visible] [--allow-events]
 ```
+
+打开工作簿时**默认禁用事件**（`EnableEvents=False`）：装载器/宿主工作簿的 `Workbook_Open` 不会被顺带跑起来；确实想让它触发时加 `--allow-events`。`vba_diagnose.py` 恒禁用事件 —— 诊断绝不该跑用户的程序。
 
 ## 铁律（每条都对应一次实机事故）
 

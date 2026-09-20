@@ -45,6 +45,8 @@ python tools/vba/run_vba.py \
 
 Exit codes: `0` all passed ｜ `1` failures ｜ `2` blocked (dangerous code).
 
+Workbook events are **off by default** (`EnableEvents=False`) — opening a loader workbook will **not** run its `Workbook_Open`. Add `--allow-events` if you *want* the workbook's own startup logic to fire.
+
 The bundled template uses Chinese sheet names — `明细数据` (data) / `汇总` (summary) / `校验` (checks). Rename freely; the assertions just have to match.
 
 ### C. Handle a stuck dialog or the Attribute trap

@@ -1,0 +1,141 @@
+Option Explicit
+
+' 通用示例模板：多维汇总工作簿（实测通过 0.73s）
+'   建 3 张表(明细数据/汇总/校验) -> 6 个主体 × 6 期 × 4 指标 -> 格式/3色阶条件格式/自动筛选/冻结窗格
+'   -> SUMIF 汇总块 -> 透视表(主体×期间=收入) -> 柱状图 -> 对账校验 -> 命名区域 -> 耗时写校验表
+' 用法：内容先删掉所有 Attribute 行，再注入（run_vba.py 会自动剥），然后 Application.Run "BuildSummaryReport"
+Sub BuildSummaryReport()
+    Dim t0 As Double, LOGPATH As String
+    t0 = Timer
+    LOGPATH = Environ$("TEMP") & "\vba_report.log"
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.Calculation = xlCalculationManual
+
+    Dim wsD As Worksheet, wsS As Worksheet, wsC As Worksheet
+    Dim nm As Variant
+    For Each nm In Array("明细数据", "汇总", "校验")
+        On Error Resume Next
+        ThisWorkbook.Worksheets(CStr(nm)).Delete
+        On Error GoTo EH
+    Next nm
+
+    Set wsD = ThisWorkbook.Worksheets.Add
+    wsD.Name = "明细数据"
+    Set wsS = ThisWorkbook.Worksheets.Add
+    wsS.Name = "汇总"
+    Set wsC = ThisWorkbook.Worksheets.Add
+    wsC.Name = "校验"
+
+    ' ---- 1) 造数（把主体/期间/指标换成你的口径即可）----
+    Dim companies As Variant, periods As Variant, head As Variant
+    companies = Array("主体A", "主体B", "主体C", "主体D", "主体E", "主体F")
+    periods = Array("2023H1", "2023H2", "2024H1", "2024H2", "2025H1", "2025H2")
+    head = Array("主体", "期间", "营业收入(百万元)", "毛利率", "净利润(百万元)", "销量(万千升)")
+    Dim i As Long, j As Long, r As Long
+    Dim base As Double, rev As Double, gm As Double, npf As Double, vol As Double
+    For i = 0 To UBound(head)
+        wsD.Cells(1, i + 1).Value = head(i)
+    Next i
+    r = 1
+    For i = 0 To UBound(companies)
+        base = 8000# + i * 3500#
+        For j = 0 To UBound(periods)
+            r = r + 1
+            rev = base * (1 + 0.012 * j) * (1 + 0.03 * ((i Mod 3) - 1))
+            gm = 0.38 + 0.01 * i - 0.004 * j
+            npf = rev * (gm - 0.22)
+            vol = rev / (4.2 + 0.1 * i)
+            wsD.Cells(r, 1).Value = companies(i)
+            wsD.Cells(r, 2).Value = periods(j)
+            wsD.Cells(r, 3).Value = Round(rev, 1)
+            wsD.Cells(r, 4).Value = gm
+            wsD.Cells(r, 5).Value = Round(npf, 1)
+            wsD.Cells(r, 6).Value = Round(vol, 1)
+        Next j
+    Next i
+
+    ' ---- 2) 格式 + 条件格式 ----
+    With wsD.Range("A1:F" & r)
+        .Borders.LineStyle = xlContinuous
+        .Borders.Weight = xlThin
+        .Font.Size = 10
+    End With
+    With wsD.Range("A1:F1")
+        .Font.Bold = True
+        .Interior.Color = RGB(31, 78, 121)
+        .Font.Color = RGB(255, 255, 255)
+    End With
+    wsD.Range("C2:C" & r).NumberFormat = "#,##0.0"
+    wsD.Range("D2:D" & r).NumberFormat = "0.0%"
+    wsD.Range("D2:D" & r).FormatConditions.AddColorScale ColorScaleType:=3
+    wsD.Range("A1:F1").AutoFilter
+    wsD.Columns("A:F").AutoFit
+    wsD.Activate
+    wsD.Range("A2").Select
+    ActiveWindow.FreezePanes = True
+
+    ' ---- 3) SUMIF 汇总块（供图表）----
+    wsS.Range("F2").Value = "主体"
+    wsS.Range("G2").Value = "收入合计"
+    For i = 0 To UBound(companies)
+        wsS.Cells(3 + i, 6).Value = companies(i)
+        wsS.Cells(3 + i, 7).Formula = "=SUMIF('明细数据'!$A:$A,F" & (3 + i) & ",'明细数据'!$C:$C)"
+    Next i
+
+    ' ---- 4) 透视表 ----
+    Dim pc As PivotCache, pt As PivotTable
+    Set pc = ThisWorkbook.PivotCaches.Create(SourceType:=xlDatabase, _
+             SourceData:="明细数据!" & wsD.Range("A1:F" & r).Address)
+    Set pt = pc.CreatePivotTable(TableDestination:=wsS.Range("A3"), TableName:="ptSummary")
+    With pt
+        .PivotFields("主体").Orientation = xlRowField
+        .PivotFields("期间").Orientation = xlColumnField
+        .AddDataField .PivotFields("营业收入(百万元)"), "收入合计", xlSum
+    End With
+
+    ' ---- 5) 图表 ----
+    Dim ch As ChartObject
+    Set ch = wsS.ChartObjects.Add(320, 250, 460, 230)
+    ch.Chart.SetSourceData Source:=wsS.Range("F2:G" & (2 + UBound(companies) + 1))
+    ch.Chart.ChartType = xlColumnClustered
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "各主体营业收入合计（百万元）"
+
+    ' ---- 6) 对账校验 + 自检指标 ----
+    wsC.Range("A1").Value = "校验项"
+    wsC.Range("B1").Value = "结果"
+    wsC.Range("A2").Value = "数据行数"
+    wsC.Range("B2").Formula = "=COUNTA('明细数据'!A2:A1000)"
+    wsC.Range("A3").Value = "收入合计"
+    wsC.Range("B3").Formula = "=ROUND(SUM('明细数据'!C2:C1000),1)"
+    wsC.Range("A4").Value = "SUMIF对账差额"
+    wsC.Range("B4").Formula = "=ROUND(SUM('明细数据'!C2:C1000)-SUM('汇总'!G3:G8),4)"
+    wsC.Range("A5").Value = "毛利率区间检查"
+    wsC.Range("B5").Formula = "=IF(AND(MIN('明细数据'!D2:D1000)>0.2,MAX('明细数据'!D2:D1000)<0.6),""通过"",""异常"")"
+    wsC.Range("A8").Value = "工作表数"
+    wsC.Range("B8").Value = ThisWorkbook.Worksheets.Count
+    wsC.Range("A9").Value = "透视表数"
+    wsC.Range("B9").Value = wsS.PivotTables.Count
+    wsC.Range("A10").Value = "图表数"
+    wsC.Range("B10").Value = wsS.ChartObjects.Count
+    wsC.Range("A11").Value = "命名区域数"
+    wsC.Range("B11").Value = ThisWorkbook.Names.Count
+
+    ThisWorkbook.Names.Add Name:="收入数据", RefersTo:="='明细数据'!$C$2:$C$" & r
+
+    Application.Calculation = xlCalculationAutomatic
+    Application.CalculateFull
+    wsC.Range("A6").Value = "宏耗时(秒)"
+    wsC.Range("B6").Value = Round(Timer - t0, 3)
+    Application.ScreenUpdating = True
+    wsD.Range("A1").Select
+    Exit Sub
+EH:
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+    ActiveSheet.Range("Z1").Value = "ERR " & Err.Number & ": " & Err.Description
+    Open LOGPATH For Append As #1
+    Print #1, Format(Now, "yyyy-mm-dd hh:nn:ss") & " | BuildSummaryReport | " & Err.Number & " | " & Err.Description
+    Close #1
+End Sub

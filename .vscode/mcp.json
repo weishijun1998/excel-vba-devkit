@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "vba-kit": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "${workspaceFolder}/tools/vba/mcp_server.py"
+      ]
+    }
+  }
+}

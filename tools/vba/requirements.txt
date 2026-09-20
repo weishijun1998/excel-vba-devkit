@@ -1,0 +1,4 @@
+# vba-kit 依赖（Windows + 本机 Excel）
+# mcp_server.py 本身零依赖；这三个是脚本所需的
+pywin32>=306
+psutil>=5.9

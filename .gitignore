@@ -1,0 +1,19 @@
+# 运行产物
+__pycache__/
+*.pyc
+*.xlsm
+*.xlsx
+*.runreport.json
+*.hb
+vba_report.log
+hermes_*.log
+
+# 本地编辑器/系统
+.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# 依赖
+.venv/
+venv/

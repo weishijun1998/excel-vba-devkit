@@ -1,5 +1,7 @@
 # VBA Copilot Kit
 
+[![ci](https://github.com/weishijun1998/vba-copilot-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/weishijun1998/vba-copilot-kit/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **English** ｜ [中文说明](README.zh-CN.md)
 
 Bring a battle-tested Excel VBA development pipeline into **VS Code + GitHub Copilot** (or any Agent Skills / MCP host), so an AI can write macros that actually run — and prove it.

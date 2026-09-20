@@ -1,5 +1,7 @@
 # VBA Copilot Kit
 
+[![ci](https://github.com/weishijun1998/vba-copilot-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/weishijun1998/vba-copilot-kit/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 [English](README.md) ｜ **中文**
 
 把一套经过实机验证的 Excel VBA 宏开发流水线搬进 **VS Code + GitHub Copilot**（也兼容任何支持 Agent Skills / MCP 的宿主），让 AI 写出来的宏**真的能跑，而且能自证**。

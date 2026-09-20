@@ -44,14 +44,16 @@ UNQUALIFIED = [
     (re.compile(r"(?<!\.)\bColumns\s*\("), "Columns("),
     (re.compile(r"(?<!\.)\bRows\s*\("), "Rows("),
     (re.compile(r"(?<!\.)\bSelection\b"), "Selection"),
-    (re.compile(r"(?<!\.)\bWindows\s*\("), "Windows("),
-    (re.compile(r"(?<!\.)\bWorkbooks\s*\("), "Workbooks("),
     (re.compile(r"\bActiveSheet\b"), "ActiveSheet"),
     (re.compile(r"\bActiveWorkbook\b"), "ActiveWorkbook"),
     (re.compile(r"\bActiveWindow\b"), "ActiveWindow"),
     (re.compile(r"\bApplication\s*\.\s*(?:Sheets|Worksheets|Range|Cells|ActiveSheet|ActiveWorkbook)\b"),
      "Application.xxx"),
 ]
+# 注意：`Workbooks("名字")`、`Workbooks(1)`、`Windows(1)` **实测是安全的** ——
+# 按名字/序号取对象，不依赖"活动工作簿/活动工作表"。所以**不列入**上面的清单，
+# 免得把正确代码报成问题（实测：隐藏窗口下 A~D 四种写法全部成功，
+# 只有 Application.Range 这类依赖活动工作表的才报 1004）。
 
 
 def _setup_stdio():

@@ -44,8 +44,6 @@ UNQUALIFIED = [
     (re.compile(r"(?<!\.)\bColumns\s*\("), "Columns("),
     (re.compile(r"(?<!\.)\bRows\s*\("), "Rows("),
     (re.compile(r"(?<!\.)\bSelection\b"), "Selection"),
-    (re.compile(r"(?<!\.)\bWindows\s*\("), "Windows("),
-    (re.compile(r"(?<!\.)\bWorkbooks\s*\("), "Workbooks("),
     (re.compile(r"\bActiveSheet\b"), "ActiveSheet"),
     (re.compile(r"\bActiveWorkbook\b"), "ActiveWorkbook"),
     (re.compile(r"\bActiveWindow\b"), "ActiveWindow"),

@@ -1,15 +1,17 @@
 ---
-name: 'VBA 宏开发铁律'
-description: '开发/调试 Excel VBA 宏时必须遵守的规则（踩过事故的每一条）'
+name: 'VBA macro rules'
+description: 'Non-negotiable rules when writing or debugging Excel VBA macros (中文规则见技能 references/zh-CN.md)'
 applyTo: ['**/*.bas', '**/*.vba', '**/vba/**/*.py', 'tools/vba/**']
 ---
 
-# VBA 宏开发铁律
+# VBA macro rules
 
-- **注入前剥掉所有 `Attribute` 行**：它是 VBE 的元数据，只在导出的 `.bas` 里合法；带它注入会让模块编译失败并拖垮整个工程，报 `0x800A03EC` +"宏可能被禁用"（**不是**宏安全设置问题）。坏模块必须就地覆写或删除。
-- **代码里禁止** `MsgBox`、`InputBox`、`Stop`、`Debug.Assert`、UserForm `.Show` —— 都会让自动化实例挂死（`Stop`/`Debug.Assert` 是无弹窗假死）。
-- **每个宏加兜底**：`On Error GoTo EH`，EH 把 `Err.Number & ": " & Err.Description` 写单元格 + 追加日志文件（读取用 `encoding="gbk"`）。
-- **跑宏只走 `python tools/vba/run_vba.py`**：它会剥 Attribute、拦危险语句、起守卫、强制重算、跑断言、出报告；不要手写 win32com 注入步骤。
-- **跑完必须验证**：用 `--expect` 断言关键单元格 / 表 / 透视表 / 命名区域；"没报错"不等于"算对了"。
-- **性能**：数据在数组里算好一次性写回；关 `ScreenUpdating`/`Calculation`；不逐格循环（单次写入 64 µs）；步骤标记只放阶段边界，不放循环体。
-- **失败先看报告再改**：报告里已有判定（正常/报错弹窗/假死/跑飞）+ 错因 + 断言逐条，不要凭猜重跑。
+- **Strip every `Attribute` line before injecting.** It is VBE-owned metadata, valid only in exported `.bas` files. Injected as source it breaks compilation and takes the whole VBA project down (`0x800A03EC` + "macro may be disabled" — **not** a Trust Center issue). Overwrite or delete broken modules in place.
+- **Never emit** `MsgBox`, `InputBox`, `Stop`, `Debug.Assert`, or UserForm `.Show` — each hangs an automated instance (`Stop` / `Debug.Assert` produce a hang with **no dialog**).
+- **Give every macro an error trap**: `On Error GoTo EH`, writing `Err.Number & ": " & Err.Description` to a cell **and** a log file (read those files as `gbk`).
+- **Run macros only through `python tools/vba/run_vba.py`** — it strips Attribute lines, blocks dangerous statements, attaches the guard, forces recalculation, evaluates assertions and prints a report. Do not hand-roll win32com injection.
+- **Always verify**: use `--expect` on key cells / sheets / PivotTables / named ranges. "No error" is not "correct".
+- **Performance**: compute in arrays and write ranges in one shot; disable `ScreenUpdating` / `Calculation`; never loop cell-by-cell (one write = 64 µs). Step markers only at phase boundaries, never inside loops.
+- **Read the report before changing code**: it already carries the verdict (ok / error dialog / idle hang / runaway) + the real error + per-assertion results. Don't re-run on a hunch.
+
+中文版：`.github/skills/excel-vba-automation/references/zh-CN.md`

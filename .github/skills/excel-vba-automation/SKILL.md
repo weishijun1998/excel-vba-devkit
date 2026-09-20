@@ -1,58 +1,59 @@
 ---
 name: excel-vba-automation
-description: Use when 开发/调试/批量运行 Excel VBA 宏（写宏、修编译错、跑测试、处理报错弹窗或卡死、批量刷新工作簿）。
+description: Use when developing, debugging or batch-running Excel VBA macros (开发/调试/批量运行 Excel VBA 宏：写宏、修编译错、跑测试、处理报错弹窗或卡死、批量刷新工作簿). Runs macros through a guarded dev-test runway instead of hand-rolled win32com.
 allowed-tools: shell
 ---
 
-# Excel VBA 宏开发与运行（自动化流水线）
+# Excel VBA development & execution (guarded pipeline)
 
-用 **`tools/vba/run_vba.py`** 作为唯一入口跑宏，**不要**手写 win32com/pywin32 的注入步骤 —— 那会重复踩下面这些坑。
+Always run macros through **`tools/vba/run_vba.py`**. Never hand-roll win32com injection — that just re-creates every trap listed below.
 
 ```bash
-python tools/vba/run_vba.py --workbook <x.xlsm> --code <模块名=文件> --run <宏名> \
-  --expect "cell:表!A1=值" [--expect ...] [--save] [--keep-open] [--visible]
+python tools/vba/run_vba.py --workbook <x.xlsm> --code <ModuleName=file> --run <MacroName> \
+  --expect "cell:Sheet!A1=value" [--expect ...] [--save] [--keep-open] [--visible]
 ```
 
-## 铁律（每条都对应一次实机事故）
+## Hard rules (each one is a real incident)
 
-1. **注入前剥掉所有 `Attribute` 行**。`Attribute VB_Name = "X"` 是 VBE 自己的元数据，只在导出的 `.bas` 里合法；当源码注入会让该模块编译失败，**并且拖垮整个工程**（旁边新加的干净模块也跑不了），Excel 报 `0x800A03EC` + "宏可能被禁用" —— 极易误判成宏安全设置。`run_vba.py` 会自动剥；手写注入时要自己剥，且**坏模块必须就地覆写或删除**，旁边加新模块无效。
-2. **代码里禁止 `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / UserForm `.Show`**。前两者和后三者都会让自动化实例**挂死**（`Stop`/`Debug.Assert` 最隐蔽：把 VBE 拉进断点模式，**无弹窗、纯假死**）。`run_vba.py` 注入前静态拦截。
-3. **每个宏都加兜底**：`On Error GoTo EH`，EH 里把 `Err.Number & ": " & Err.Description` 写进单元格，并追加一行到日志文件（`Open ... For Append`）。这是"没有弹窗时"唯一的错因来源。读日志文件用 `encoding="gbk"`（ANSI 写入）。
-4. **运行前保存**（`run_vba.py` 默认做）。这样守卫判定卡死而杀进程时，只损失一次重开会话，不是未保存内容全丢。
-5. **性能**：数据先在数组里算好、**一次性写回区域**；关 `ScreenUpdating`、`Calculation = xlCalculationManual`（结束前恢复）；能靠公式/SUMIF/透视表的不用 VBA 循环。
-   - 实测：单次单元格写入 **64 µs**、文件追加 **359 µs**。**逐格循环是宏变慢的头号原因**（10 万次 = 6.4 秒）；VBA 纯计算 300 万次只要 49 ms。
-   - 进度/步骤标记只放在**阶段边界**（≤10 处），**绝不放进循环体**。
-6. **宏跑完不等于跑对**：必须写断言回读关键单元格/表/透视表/命名区域。断言数字按数值比较；公式值要在**强制重算后**读（`run_vba.py` 已处理）。
+1. **Strip every `Attribute` line before injecting.** `Attribute VB_Name = "X"` is VBE-owned metadata, valid only in exported `.bas` files. Injected as source text it makes that module fail to compile — **and takes the whole project down with it** (a clean module added next to it won't run either). Excel then reports `0x800A03EC` + "the macro may be disabled", which is **not** a Trust Center problem. `run_vba.py` strips it; when injecting by hand, strip it yourself — and **overwrite or delete the broken module in place**; adding a new one beside it does not help.
+2. **Never emit `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / UserForm `.Show`.** Each one hangs an automated instance (`Stop` / `Debug.Assert` are the sneakiest: they drop the VBE into break mode → **no dialog, pure hang**). `run_vba.py` blocks them before injection.
+3. **Give every macro an error trap**: `On Error GoTo EH`, and in `EH` write `Err.Number & ": " & Err.Description` into a cell **and** append a line to a log file (`Open ... For Append`). That record is the only error source available when no dialog ever appears. Read those files with `encoding="gbk"` (VBA writes ANSI).
+4. **Save before running** — `run_vba.py` does this by default. When the guard decides a macro is hung and kills Excel, you then lose one session instead of unsaved work.
+5. **Performance**: compute inside arrays and **write the range in one shot**; disable `ScreenUpdating` and set `Calculation = xlCalculationManual` (restore afterwards); prefer formulas / SUMIF / PivotTables over VBA loops.
+   - Measured: one cell write = **64 µs**, one file append = **359 µs**. **Cell-by-cell loops are the #1 cause of slow macros** (100 k writes ≈ 6.4 s), while pure VBA arithmetic does 3 M iterations in 49 ms.
+   - Put progress / step markers only at **phase boundaries** (≤10), **never inside a loop**.
+6. **A macro that finished is not a macro that is correct.** Assert on key cells / sheets / PivotTables / named ranges. Numbers compare numerically; formula results must be read **after a forced recalculation** (`run_vba.py` handles that).
 
-## 失败判定矩阵（`vba_guard.py`）
+## Failure matrix (`vba_guard.py`)
 
-| 现象 | 判据 | 处置 | 实测 |
+| Symptom | Detection | Handling | Measured |
 |---|---|---|---|
-| 报错弹窗 | `#32770` 且标题含 `Visual Basic` | 点 id **4800**"结束"按钮（**不要 WM_CLOSE，无效**） | 出现→消失 12–46 ms，Excel 存活 |
-| 假死等 IO | 消息泵无响应 + 近 2 秒 CPU≈0 | 超 `hang_after`（默认 6s）杀 | 6.6 s 判 `IDLE_HUNG` |
-| 死循环跑飞 | 消息泵无响应 + CPU 持续 >0.3s/2s | 超硬预算杀 | 20.8 s 判 `RUNAWAY_CPU` |
-| 长任务在推进 | 心跳文件新鲜 | **不杀**，继续等 | 16 s 宏零误杀 |
-| 慢但泵消息 | 活性探测有响应 | 不杀 | — |
+| Error dialog | class `#32770`, title contains `Visual Basic` | click the id **4800** "End" button (**not `WM_CLOSE` — that does nothing**) | appears → gone in **12–46 ms**, Excel survives |
+| Idle hang | message pump unresponsive + ≈0 CPU over the last 2 s | kill after `hang_after` (default 6 s) | `IDLE_HUNG` at **6.6 s** |
+| Runaway loop | unresponsive + CPU > 0.3 s per 2 s | kill after the hard budget | `RUNAWAY_CPU` at **20.8 s** |
+| Long job making progress | heartbeat file is fresh | **do not kill**, keep waiting | 16 s macro, **zero false kills** |
+| Slow but pumping messages | liveness probe responds | do not kill | — |
 
-弹窗里读错因：`Static` 控件 **id 4803** 就是错误原文（如 `运行时错误 '9': 下标越界`）。按钮控件 ID：**4800=结束、4801=调试、4802=继续（通常灰）、4902=帮助**。
+Reading the cause out of a dialog: the `Static` control **id 4803** holds the message (e.g. `Runtime error '9': Subscript out of range`). Button ids: **4800 = End, 4801 = Debug, 4802 = Continue (usually greyed out), 4902 = Help**.
 
-## 错误归因顺序
+## Error attribution order
 
-1. 守卫抓到的弹窗文本（`ERRTEXT`）→ 最准
-2. 宏内兜底写的单元格 / 日志文件 → 无弹窗时
-3. `com_error` 的 hresult：`0x800A03EC`=Attribute 行；`0x800A9C68`=编译错；`0x800706BE`(RPC_S_CALL_FAILED)=**守卫刚杀的进程**，不是宏的错
-4. 静态检查（注入前就拦）
-5. 断言失败时的实际值 + 上下文（例：`sheet:差异分析=存在 ❌ (现有工作表: ['月度数据','Sheet1'])` —— 一眼看出表名写错）
+1. Dialog text captured by the guard (`ERRTEXT`) — most precise
+2. The in-macro error record (cell / log file) — when no dialog appears
+3. `com_error` hresult: `0x800A03EC` = Attribute line; `0x800A9C68` = compile error; `0x800706BE` (`RPC_S_CALL_FAILED`) = **the guard just killed the process**, not a macro bug
+4. Static checks (blocked before injection)
+5. Assertion failures, reported with the actual value + context (e.g. `sheet:差异分析=存在 ❌ (existing sheets: ['月度数据','Sheet1'])` — an instant typo diagnosis)
 
-## 开发循环（写 → 测 → 修）
+## Development loop (write → test → fix)
 
-1. 写模块到 `*.bas`/`*.txt`（不带 `Attribute` 行）
-2. `run_vba.py` 跑：拿到 **判定 + 错因 + 断言逐条**
-3. 按错因改代码（`--keep-open` 复用已开的 Excel 实例，每轮 1–3 秒）
-4. 重复至 `exit 0`；**最多 3 轮**，第 4 轮还不过就把原文错误 + 改动清单交给人
+1. Write the module to `*.bas` / `*.txt` (no `Attribute` lines)
+2. Run `run_vba.py`: you get **verdict + error + per-assertion results**
+3. Fix from the error (`--keep-open` reuses the open Excel instance → **1–3 s per round**)
+4. Repeat until `exit 0`; **max 3 rounds**, then hand the raw error plus the list of attempts to a human
 
-## 参考
+## Reference
 
-- `templates/vba_summary_report.bas.txt` — 通用多维汇总模板（宏名 `BuildSummaryReport`）：3 张表 / 造数 / 格式 + 3 色阶条件格式 / 自动筛选 / 冻结窗格 / SUMIF / 透视表 / 柱状图 / 对账校验 / 命名区域（实测 0.73 s）
-- `scripts/` 在本 kit 的 `tools/vba/`（`run_vba.py`、`vba_guard.py`、`dismiss_vba_dialog.py`、`vba_attr_probe.py`）
-- 路径一律用 `/`，保持跨平台可移植
+- `templates/vba_summary_report.bas.txt` — multi-dimensional summary template (macro `BuildSummaryReport`): 3 sheets / generated data / formatting + 3-colour scale / autofilter / freeze panes / SUMIF / PivotTable / column chart / reconciliation checks / named range (**0.47 s**, 8/8 assertions green)
+- Scripts live in this kit's `tools/vba/` (`run_vba.py`, `vba_guard.py`, `dismiss_vba_dialog.py`, `vba_attr_probe.py`)
+- 中文完整版：[references/zh-CN.md](references/zh-CN.md)
+- Use `/` path separators only, for cross-platform portability

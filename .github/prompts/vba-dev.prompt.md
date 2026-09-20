@@ -1,47 +1,49 @@
 ---
-description: '开发/修改一个 Excel VBA 宏并自动跑测试（写→测→修循环）'
-argument-hint: '要做什么宏？目标工作簿路径 + 期望结果（如：汇总各公司收入并加透视表）'
+description: 'Develop or modify an Excel VBA macro and test it automatically (write → test → fix loop)'
+argument-hint: 'What should the macro do? Workbook path + expected results (e.g. aggregate revenue by company with a PivotTable)'
 agent: 'agent'
 ---
 
-# 开发一个 VBA 宏并自动测试
+# Develop a VBA macro and test it automatically
 
-按下面流程做，全程用终端工具，**不要**手写 win32com 注入步骤。
+Follow these steps using the terminal tool. **Do not** hand-roll win32com injection.
 
-## 1. 确认输入
+## 1. Establish the inputs
 
-用 `#tool:vscode/askQuestions` 问清（缺什么问什么，别猜）：
+Ask with `#tool:vscode/askQuestions` (ask for what's missing — don't guess):
 
-- 目标工作簿路径（`.xlsm`，不存在则新建）
-- 输出要求：建哪些表 / 哪些字段 / 什么口径 / 要不要透视表·图表
-- 可验证的期望值（那怕一两个：某个单元格应等于多少、应出现哪张表）
+- Target workbook path (`.xlsm`; create it if missing)
+- Output requirements: which sheets / fields / definitions / PivotTable or chart?
+- Verifiable expectations: at least one or two (a cell that must equal a value, a sheet that must exist)
 
-## 2. 写代码
+## 2. Write the code
 
-- 写到 `macro/<模块名>.bas`（**不带 `Attribute` 行**）
-- 每个宏带 `On Error GoTo EH` 兜底：把 `Err.Number & ": " & Err.Description` 写进单元格 + 追加日志文件
-- 性能：数组一次性写回、关 `ScreenUpdating`/`Calculation`、不逐格循环
-- 参考 `.github/skills/excel-vba-automation/templates/vba_summary_report.bas.txt`（通用多维汇总模板）
+- Write to `macro/<ModuleName>.bas` (**no `Attribute` lines**)
+- Every macro gets an `On Error GoTo EH` trap: write `Err.Number & ": " & Err.Description` to a cell + append a log file
+- Performance: arrays written in one shot, `ScreenUpdating` / `Calculation` off, no cell-by-cell loops
+- Start from `.github/skills/excel-vba-automation/templates/vba_summary_report.bas.txt`
 
-## 3. 跑测试
+## 3. Run the tests
 
 ```bash
-python tools/vba/run_vba.py --workbook "<工作簿路径>" --code <模块名>=macro/<模块名>.bas \
-  --run <宏名> --expect "cell:<表>!<单元格>=<期望值>" [更多 --expect] --keep-open --save
+python tools/vba/run_vba.py --workbook "<workbook path>" --code <ModuleName>=macro/<ModuleName>.bas \
+  --run <MacroName> --expect "cell:<Sheet>!<cell>=<expected>" [more --expect] --keep-open --save
 ```
 
-读报告里的三样东西：**判定**、**错因**、**断言逐条**。
+Read three things in the report: the **verdict**, the **error**, and the **per-assertion results**.
 
-## 4. 按错因修，最多 3 轮
+## 4. Fix from the error — max 3 rounds
 
-- 判定是 `vba_error_dialog*`：看 `错因`（就是 VBA 原文），定位到具体语句改
-- 判定是 `idle_hung` / `runaway_cpu`：宏里有死循环或等待外部资源，改逻辑（必要时加超时/退出条件）
-- `⛔ 拒绝注入`：删掉 `MsgBox`/`Stop`/`Debug.Assert` 之类
-- 断言失败：报告给了实际值 + 上下文（如现有工作表列表）→ 对照期望值判断是代码问题还是口径问题
-- 每轮改完重跑；**复用一个 Excel 实例**（`--keep-open`）保持 1–3 秒一轮
+- Verdict `vba_error_dialog*`: read the error (raw VBA text) and fix that statement
+- Verdict `idle_hung` / `runaway_cpu`: an infinite loop or a wait on an external resource — change the logic (add an exit condition / timeout)
+- `⛔ injection refused`: remove `MsgBox` / `Stop` / `Debug.Assert` and friends
+- Assertion failed: the report gives the actual value + context (e.g. existing sheet names) — decide whether it's a code bug or a definition (口径) question
+- Re-run after each change; **reuse the open Excel instance** (`--keep-open`) to keep rounds at 1–3 s
 
-## 5. 收尾
+## 5. Wrap up
 
-- 全绿（`exit 0`）后向用户汇报：做了什么宏、测试报告结论、关键数字、工作簿路径
-- 3 轮还不过：把**原文错误 + 已尝试的改动**交给人，不要盲目继续
-- 口径类问题（数字对不对）**必须让用户确认**，不要自行认定
+- On all green (`exit 0`) report to the user: what the macro does, the test report conclusion, key numbers, workbook path
+- Still failing after 3 rounds: hand the **raw error + the changes you tried** to a human — don't keep guessing
+- Definition questions (are these numbers right?) **must be confirmed by the user**
+
+中文版：`/vba-dev-zh`

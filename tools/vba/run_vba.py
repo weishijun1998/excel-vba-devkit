@@ -115,6 +115,31 @@ def inject(vbp, mod, code):
     return c
 
 
+def resolve_run_name(xl, wb, name):
+    """裸宏名是拿「当前活动工作簿」解析的。
+
+    如果工作簿窗口在磁盘上就是隐藏的（常见的"装载器/宿主工作簿"设计：打开就跑程序、
+    不让用户被这个簿子干扰），打开后 `ActiveWorkbook` 为 None，`Run("裸名")` 必然失败；
+    而报错文本与 Attribute 行事故**一字不差**（「无法运行"X"宏。可能是因为该宏在此工作簿
+    中不可用，或者所有的宏都被禁用」），照 Attribute 的方向查会一无所获。
+
+    这种情况**是设计，不是故障**，不要为了迁就去改造工作簿；这里自动补成
+    "工作簿名!宏名" 即可。返回 (实际使用的名字, 是否被自动限定)。
+    """
+    if "!" in name:
+        return name, False
+    try:
+        if xl.ActiveWorkbook is not None:
+            return name, False
+    except Exception:
+        pass
+    try:
+        wb_name = wb.Name
+    except Exception:
+        return name, False
+    return "%s!%s" % (wb_name, name), True
+
+
 def read_cell(wb, spec):
     """spec 形如 表!A1"""
     if "!" not in spec:
@@ -165,7 +190,8 @@ def main():
     wb_path = os.path.abspath(args.workbook)
     report = {"workbook": wb_path, "macro": args.run, "verdict": None, "run_return": None,
               "elapsed_s": None, "error": None, "guard": [], "assertions": [], "code_scan": [],
-              "reused_instance": False, "saved": False, "excel_alive": None}
+              "reused_instance": False, "saved": False, "excel_alive": None,
+              "run_name": None, "run_name_qualified": None, "run_retried_qualified": False}
     problems = []
 
     # ---- 1) 读代码 + 剥 Attribute + 静态检查 ----
@@ -252,12 +278,34 @@ def main():
     # ---- 6) 运行 ----
     t0 = time.time()
     run_exc = None
+    run_name, auto_qualified = resolve_run_name(xl, wb, args.run)
+    report["run_name"] = run_name
+    if auto_qualified:
+        report["run_name_qualified"] = run_name
+        log("⚠ 工作簿窗口为隐藏态（ActiveWorkbook 为空）→ 自动改用限定名: %s" % run_name)
+        log("  （装载器/宿主类工作簿常故意隐藏窗口，属设计而非故障，不改文件）")
     try:
-        xl.Run(args.run)
+        xl.Run(run_name)
         report["run_return"] = "ok"
     except Exception as e:
-        run_exc = e
-        report["run_return"] = "exception: %s" % (repr(e)[:300],)
+        msg = str(e)
+        if (not auto_qualified) and any(
+                k in msg for k in ("无法运行", "Cannot run the macro",
+                                   "宏在此工作簿中不可用", "may be disabled")):
+            retry = "%s!%s" % (wb.Name, args.run)
+            log("↻ 裸宏名解析失败 → 自动重试限定名: %s" % retry)
+            try:
+                xl.Run(retry)
+                report["run_name"] = retry
+                report["run_name_qualified"] = retry
+                report["run_retried_qualified"] = True
+                report["run_return"] = "ok（自动重试限定名成功）"
+            except Exception as e2:
+                run_exc = e2
+                report["run_return"] = "exception: %s" % (repr(e2)[:300],)
+        else:
+            run_exc = e
+            report["run_return"] = "exception: %s" % (repr(e)[:300],)
     report["elapsed_s"] = round(time.time() - t0, 3)
 
     # ---- 7) 收守卫（给宽限期，让它把 DISMISSED_BY_CLICK / VERDICT 打完）----
@@ -290,8 +338,14 @@ def main():
     killed = "KILLED" in gtxt
     run_ok = run_exc is None
 
-    if dialog or (run_exc and "宏" in str(run_exc)):
-        report["verdict"] = "vba_error_dialog" + ("_dismissed" if dialog else "")
+    # 无弹窗的「无法运行宏」= 宏名解析不到 / 工程编译不过，与"运行时错误弹窗"不是一类
+    macro_unavailable = bool(run_exc) and any(
+        k in str(run_exc) for k in ("无法运行", "Cannot run the macro",
+                                    "宏在此工作簿中不可用", "宏可能被禁用", "may be disabled"))
+    if dialog:
+        report["verdict"] = "vba_error_dialog_dismissed"
+    elif macro_unavailable and not report.get("run_retried_qualified"):
+        report["verdict"] = "macro_not_runnable"
     elif killed:
         kind = "idle_hung" if "IDLE_HUNG" in gtxt else ("runaway_cpu" if "RUNAWAY_CPU" in gtxt else "killed")
         report["verdict"] = kind
@@ -397,6 +451,7 @@ def main():
         "ok": "✅ 正常运行完成",
         "vba_error_dialog_dismissed": "❌ VBA 报错（弹窗已自动点掉，Excel 存活）",
         "vba_error_dialog": "❌ VBA 报错",
+        "macro_not_runnable": "❌ 宏无法运行（无弹窗：宏名解析不到 / 工程编译不过）",
         "idle_hung": "❌ 卡死（无弹窗、零 CPU）→ 已杀进程",
         "runaway_cpu": "❌ 跑飞（无弹窗、CPU 拉满）→ 已杀进程",
         "killed": "❌ 被守卫终止",
@@ -405,6 +460,10 @@ def main():
     }.get(report["verdict"], report["verdict"])
     log("结论: %s" % verdict_cn)
     log("耗时: %ss | 宏返回: %s" % (report["elapsed_s"], report["run_return"]))
+    if report.get("run_name_qualified"):
+        log("宏名: 已自动限定为 %s（%s）" % (
+            report["run_name_qualified"],
+            "裸名失败后重试成功" if report.get("run_retried_qualified") else "窗口隐藏态，属设计，未改文件"))
     if report["error"]:
         log("错因: %s" % report["error"])
     if dialog:

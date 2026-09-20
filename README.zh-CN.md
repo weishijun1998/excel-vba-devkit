@@ -59,7 +59,8 @@ python tools/vba/vba_guard.py <excel_pid> 60  # 单独挂守卫看一个长任�
 
 | 路径 | 作用 |
 |---|---|
-| `tools/vba/run_vba.py` | **开发测试跑道**：剥 Attribute → 危险语句拦截 → 注入 → 守卫 → 运行 → 强制重算 → 断言 → 报告 |
+| `tools/vba/run_vba.py` | **开发测试跑道**：剥 Attribute → 危险语句拦截 → 注入 → 守卫 → 运行 → 强制重算 → 断言 → 报告。窗口隐藏的工作簿会**自动改用限定名** |
+| `tools/vba/vba_diagnose.py` | **只读诊断**（宏"跑不起来"时先跑它）：窗口隐藏 / 坏引用 / `Attribute` 行。传文件或**目录**都行——目录模式是纯静态检查，不用开 Excel |
 | `tools/vba/vba_guard.py` | **守卫**：弹窗点掉（点 id **4800**"结束"按钮）/ 假死判定 / 跑飞判定 / 心跳保护 |
 | `tools/vba/dismiss_vba_dialog.py` | 卡住弹窗一键清理（BM_CLICK → WM_COMMAND → 真实鼠标 → 杀进程） |
 | `tools/vba/vba_attr_probe.py` | Attribute 行探针（复现 `0x800A03EC` 假故障） |
@@ -80,6 +81,7 @@ python tools/vba/vba_guard.py <excel_pid> 60  # 单独挂守卫看一个长任�
 - 脚本行为：四轮开发流程（报错 → 修 → 全绿）、无弹窗死循环（12.7 s 判跑飞并处置）、假死判定（6.6 s 判 `IDLE_HUNG`）、心跳保护（16 s 长任务**零误杀**）
 - 弹窗反应速度：出现 → 消失 **12–46 ms**；点掉本身 ≈ 0.2 s（含守卫冷启动）
 - 断言与报告、Attribute 假故障复现、`MsgBox` 注入前拦截
+- **隐藏窗口装载器工作簿**（窗口保存为隐藏 → 无活动工作簿 → 裸宏名必然失败）：实测裸名失败后**自动重试限定名 0.027 秒跑通**；"另存为"会继承隐藏状态（已用对照实验证实）
 - 自带模板：**8/8 断言通过，0.47 s**
 
 **未验证**（需要你的环境）：
@@ -93,7 +95,7 @@ python tools/vba/vba_guard.py <excel_pid> 60  # 单独挂守卫看一个长任�
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| 报"无法运行宏…可能宏被禁用" | 代码里有 `Attribute` 行，`run_vba.py` 会自动剥；手写时别带。**不是**信任中心的问题 |
+| 报"无法运行宏…可能宏被禁用" | **同一句话两种不相干病因**：(a) 代码里有 `Attribute` 行 —— `run_vba.py` 会自动剥，手写时别带，**不是**信任中心的问题；(b) 工作簿窗口**保存时就是隐藏的**（装载器/宿主工作簿的常见设计，**不要去改造那个文件**）→ Excel 没有活动工作簿，裸宏名解析不到。`run_vba.py` 会自动限定；`vba_diagnose.py` 可一眼分清 |
 | 注入被拒 `⛔ 拒绝注入` | 代码含 `MsgBox`/`InputBox`/`Stop`/`Debug.Assert`/`.Show`（都会挂死自动化实例），改掉或加 `--allow-unsafe` |
 | Excel 被守卫杀了怎么继续 | 运行前已保存工作簿，直接再跑一遍即可（脚本会重新打开） |
 | 不想每次点"允许运行命令" | VS Code 设置 `chat.tools.terminal.autoApprove` 放行 `python tools/vba/*` |

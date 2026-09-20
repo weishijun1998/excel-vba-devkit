@@ -61,7 +61,8 @@ python tools/vba/vba_guard.py <excel_pid> 60  # attach the guard to one long-run
 
 | Path | What it does |
 |---|---|
-| `tools/vba/run_vba.py` | **The dev-test runway**: strip `Attribute` lines → block dangerous statements → inject → guard → run → force recalculation → assert → report |
+| `tools/vba/run_vba.py` | **The dev-test runway**: strip `Attribute` lines → block dangerous statements → inject → guard → run → force recalculation → assert → report. Auto-qualifies the macro name when the workbook window is saved hidden |
+| `tools/vba/vba_diagnose.py` | **Read-only diagnosis** when a macro "cannot run": hidden window / broken references / `Attribute` lines. Takes a file *or a directory* — the directory mode is static and needs no Excel |
 | `tools/vba/vba_guard.py` | **Guard**: dismiss dialogs (clicks the id **4800** "End" button) / idle-hang verdict / runaway-CPU verdict / heartbeat protection |
 | `tools/vba/dismiss_vba_dialog.py` | One-shot cleanup of stuck dialogs (BM_CLICK → WM_COMMAND → real mouse → kill) |
 | `tools/vba/vba_attr_probe.py` | Attribute-line probe (reproduces the `0x800A03EC` false failure) |
@@ -95,7 +96,7 @@ python tools/vba/vba_guard.py <excel_pid> 60  # attach the guard to one long-run
 
 | Symptom | Cause / fix |
 |---|---|
-| "Cannot run the macro… macros may be disabled" | The code contains an `Attribute` line. `run_vba.py` strips it; don't hand-write it. It is **not** a Trust Center problem |
+| "Cannot run the macro… macros may be disabled" | Two **unrelated** causes share this exact text: (a) the code contains an `Attribute` line — `run_vba.py` strips it, don't hand-write it, and it is **not** a Trust Center problem; (b) the workbook window is **saved hidden** (normal for loader / host workbooks — by design, don't "fix" the file) → Excel has no active workbook, so bare macro names cannot resolve. `run_vba.py` auto-qualifies; `vba_diagnose.py` tells the two apart |
 | `⛔ 拒绝注入` (injection refused) | Code contains `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / `.Show` — all of which hang an automated instance. Remove them or pass `--allow-unsafe` |
 | Guard killed Excel mid-run | The workbook was saved before the run — just run again; the script reopens it |
 | Don't want to approve the command every time | VS Code setting `chat.tools.terminal.autoApprove` for `python tools/vba/*` |

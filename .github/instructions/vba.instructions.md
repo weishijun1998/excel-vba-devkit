@@ -7,6 +7,7 @@ applyTo: ['**/*.bas', '**/*.vba', '**/vba/**/*.py', 'tools/vba/**']
 # VBA macro rules
 
 - **Strip every `Attribute` line before injecting.** It is VBE-owned metadata, valid only in exported `.bas` files. Injected as source it breaks compilation and takes the whole VBA project down (`0x800A03EC` + "macro may be disabled" — **not** a Trust Center issue). Overwrite or delete broken modules in place.
+- **A hidden workbook window is a design (loader / host workbook), not a defect** — but it leaves Excel with no active workbook, so **unqualified macro names cannot run**, and the error text is *identical* to the Attribute rule above. Never "fix" the file: call `"Workbook.xlsm!Macro"` instead. `run_vba.py` qualifies automatically; inspect any file with `python tools/vba/vba_diagnose.py <file>`.
 - **Never emit** `MsgBox`, `InputBox`, `Stop`, `Debug.Assert`, or UserForm `.Show` — each hangs an automated instance (`Stop` / `Debug.Assert` produce a hang with **no dialog**).
 - **Give every macro an error trap**: `On Error GoTo EH`, writing `Err.Number & ": " & Err.Description` to a cell **and** a log file (read those files as `gbk`).
 - **Run macros only through `python tools/vba/run_vba.py`** — it strips Attribute lines, blocks dangerous statements, attaches the guard, forces recalculation, evaluates assertions and prints a report. Do not hand-roll win32com injection.

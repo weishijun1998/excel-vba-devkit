@@ -1,0 +1,80 @@
+Option Explicit
+
+' ============================================================
+' ModDemo_Bench —— 性能对照：逐格写 vs 数组一次写回（同数据、同规模）
+' ============================================================
+
+Public Sub Bench_Both(ByVal wb As Workbook, ByRef cellSecs As Double, ByRef arrSecs As Double, ByRef ratio As Double)
+    Dim nR As Long, nC As Long
+    nR = 2000
+    nC = 12
+
+    Dim ws1 As Worksheet, ws2 As Worksheet
+    Set ws1 = ModDemo_Util.EnsureSheet(wb, "基准_逐格")
+    Set ws2 = ModDemo_Util.EnsureSheet(wb, "基准_数组")
+
+    Dim arr() As Variant
+    ReDim arr(1 To nR, 1 To nC)
+    Dim i As Long, j As Long
+    For i = 1 To nR
+        For j = 1 To nC
+            arr(i, j) = i * 1000 + j
+        Next j
+    Next i
+
+    Dim oldCalc As Long
+    oldCalc = ModDemo_Util.CalcManual()
+    Application.ScreenUpdating = False
+
+    Dim t As Double
+    t = Timer
+    For i = 1 To nR
+        For j = 1 To nC
+            ws1.Cells(i, j).Value = arr(i, j)
+        Next j
+        If i Mod 500 = 0 Then ModDemo_Util.Status "④ 基准：逐格写 " & i & " / " & nR
+    Next i
+    cellSecs = Round(Timer - t, 3)
+
+    t = Timer
+    ModDemo_Util.WriteArray ws2, 1, 1, arr
+    arrSecs = Round(Timer - t, 3)
+
+    ModDemo_Util.CalcRestore oldCalc
+    Application.ScreenUpdating = True
+    Application.StatusBar = False
+    If arrSecs > 0 Then ratio = Round(cellSecs / arrSecs, 1) Else ratio = 0
+
+    Dim s1 As Double, s2 As Double
+    s1 = Application.WorksheetFunction.Sum(ws1.UsedRange)
+    s2 = Application.WorksheetFunction.Sum(ws2.UsedRange)
+    Dim ws As Worksheet
+    Set ws = ModDemo_Util.EnsureSheet(wb, "性能对照")
+    ws.Range("A1").Value = "写法"
+    ws.Range("B1").Value = "耗时(秒)"
+    ws.Range("C1").Value = "校验和"
+    ws.Range("A2").Value = "逐格写 " & nR & " 行 × " & nC & " 列"
+    ws.Range("B2").Value = cellSecs
+    ws.Range("C2").Value = s1
+    ws.Range("A3").Value = "数组一次写回（同样数据）"
+    ws.Range("B3").Value = arrSecs
+    ws.Range("C3").Value = s2
+    ws.Range("A4").Value = "加速倍数"
+    ws.Range("B4").Value = ratio
+    ws.Range("A5").Value = "两边数据一致"
+    If Abs(s1 - s2) < 0.01 Then
+        ws.Range("B5").Value = "一致"
+    Else
+        ws.Range("B5").Value = "不一致"
+    End If
+    ws.Range("A6").Value = "每次单元格写入(微秒)"
+    If cellSecs > 0 Then ws.Range("B6").Value = Round(cellSecs * 1000000 / (nR * nC), 2)
+    ModDemo_Util.StyleHeader ws.Range("A1:C1")
+    ws.Columns("A:C").AutoFit
+    ModDemo_Util.LogLine "Bench_Both", "逐格=" & cellSecs & "s, 数组=" & arrSecs & "s, 加速=" & ratio & "倍, 校验和 " & s1 & " vs " & s2
+End Sub
+
+Public Sub Bench_Run()
+    Dim a As Double, b As Double, c As Double
+    Bench_Both ThisWorkbook, a, b, c
+End Sub

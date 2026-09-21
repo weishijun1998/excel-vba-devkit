@@ -1,0 +1,9 @@
+Option Explicit
+
+' ============================================================
+' ModDemo_Scratch —— 只用来塞假值，验证「断言读到的是真重跑结果」
+' ============================================================
+
+Public Sub Scratch_Touch()
+    ThisWorkbook.Worksheets("校验").Range("B18").Value = "STALE"
+End Sub

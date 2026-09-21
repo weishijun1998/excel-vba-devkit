@@ -1,0 +1,17 @@
+Option Explicit
+
+' ============================================================
+' ModFault_Unqualified —— 故意用「未限定引用」
+'   在可见窗口的工作簿里能跑；一旦宿主是「窗口隐藏的装载器」就必炸（1004/91）
+'   用 tools/vba/vba_lint_refs.py 应该能静态扫出来
+' ============================================================
+
+Public Sub Fault_BadRef()
+    Sheets("明细数据").Range("Z10").Value = "unqualified-write"
+End Sub
+
+Public Sub Fault_BadActiveSheet()
+    Dim ws As Worksheet
+    Set ws = ActiveSheet
+    ws.Range("Z11").Value = "via-active-sheet"
+End Sub

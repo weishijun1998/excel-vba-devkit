@@ -1,0 +1,125 @@
+Option Explicit
+
+' ============================================================
+' ModDemo_Report —— 分析层：SUMIF 汇总 + 透视表 + 差异分析 + 命名区域
+'   核心：SUMIF 结果与「造数时独立累计的精确值」做对账 → 差额必须为 0
+' ============================================================
+
+Public Sub BuildAnalysis(ByVal wb As Workbook, ByVal genTotal As Double, ByVal budgetTotal As Double, _
+                         ByRef sumifDiff As Double, ByRef budgetDiff As Double, ByRef secs As Double)
+    Dim t0 As Double
+    t0 = Timer
+
+    Dim wsD As Worksheet, wsB As Worksheet, wsS As Worksheet, wsA As Worksheet
+    Set wsD = wb.Worksheets("明细数据")
+    Set wsB = wb.Worksheets("预算")
+    Set wsS = ModDemo_Util.EnsureSheet(wb, "汇总")
+    Set wsA = ModDemo_Util.EnsureSheet(wb, "差异分析")
+
+    Dim lastRow As Long
+    lastRow = wsD.Cells(wsD.Rows.Count, 1).End(xlUp).row
+
+    Dim regions As Variant, n As Long
+    regions = Array("华东", "华南", "华北", "西南", "东北")
+    n = UBound(regions) + 1
+
+    Dim i As Long, r As Long
+
+    ' ---- 1) SUMIF 汇总块（F/G 收入；I/J 预算与达成率）----
+    wsS.Range("F1").Value = "区域"
+    wsS.Range("G1").Value = "收入合计(元)"
+    wsS.Range("I1").Value = "预算合计(元)"
+    wsS.Range("J1").Value = "达成率"
+
+    Dim sumIfTot As Double, sumIfBudget As Double
+    For i = 0 To UBound(regions)
+        r = 2 + i
+        wsS.Cells(r, 6).Value = regions(i)
+        wsS.Cells(r, 7).Formula = "=SUMIF('明细数据'!$B:$B,F" & r & ",'明细数据'!$G:$G)"
+        wsS.Cells(r, 9).Formula = "=SUMIF('预算'!$A:$A,F" & r & ",'预算'!$C:$C)"
+        wsS.Cells(r, 10).Formula = "=IF(I" & r & "=0,0,G" & r & "/I" & r & ")"
+        sumIfTot = sumIfTot + Application.WorksheetFunction.SumIf(wsD.Columns(2), regions(i), wsD.Columns(7))
+        sumIfBudget = sumIfBudget + Application.WorksheetFunction.SumIf(wsB.Columns(1), regions(i), wsB.Columns(3))
+    Next i
+    ModDemo_Util.StyleHeader wsS.Range("F1:G1")
+    ModDemo_Util.StyleHeader wsS.Range("I1:J1")
+    wsS.Range("G2:G" & (1 + n)).NumberFormat = "#,##0"
+    wsS.Range("I2:I" & (1 + n)).NumberFormat = "#,##0"
+    wsS.Range("J2:J" & (1 + n)).NumberFormat = "0.0%"
+
+    ' ---- 2) 透视表：区域 × 月份 = 收入 ----
+    Dim pc As PivotCache, pt As PivotTable
+    Set pc = wb.PivotCaches.Create(SourceType:=xlDatabase, _
+             SourceData:="明细数据!" & wsD.Range("A1:I" & lastRow).Address)
+    Set pt = pc.CreatePivotTable(TableDestination:=wsS.Range("A3"), TableName:="ptDemo")
+    With pt
+        .PivotFields("区域").Orientation = xlRowField
+        .PivotFields("月份").Orientation = xlColumnField
+        .AddDataField .PivotFields("收入(元)"), "收入合计", xlSum
+    End With
+
+    ' ---- 3) 差异分析表（实际 vs 预算 + 评级）----
+    Dim ah As Variant
+    ah = Array("区域", "实际收入(元)", "预算收入(元)", "差异(元)", "达成率", "评级")
+    For i = 0 To UBound(ah)
+        wsA.Cells(1, i + 1).Value = ah(i)
+    Next i
+    For i = 0 To UBound(regions)
+        r = 2 + i
+        wsA.Cells(r, 1).Value = regions(i)
+        wsA.Cells(r, 2).Formula = "=SUMIF('明细数据'!$B:$B,A" & r & ",'明细数据'!$G:$G)"
+        wsA.Cells(r, 3).Formula = "=SUMIF('预算'!$A:$A,A" & r & ",'预算'!$C:$C)"
+        wsA.Cells(r, 4).Formula = "=B" & r & "-C" & r
+        wsA.Cells(r, 5).Formula = "=IF(C" & r & "=0,0,B" & r & "/C" & r & ")"
+        wsA.Cells(r, 6).Formula = "=IF(E" & r & ">=1,""达标"",IF(E" & r & ">=0.95,""接近"",""低于""))"
+    Next i
+    r = 2 + n
+    wsA.Cells(r, 1).Value = "合计"
+    wsA.Cells(r, 2).Formula = "=SUM(B2:B" & (r - 1) & ")"
+    wsA.Cells(r, 3).Formula = "=SUM(C2:C" & (r - 1) & ")"
+    wsA.Cells(r, 4).Formula = "=SUM(D2:D" & (r - 1) & ")"
+    wsA.Cells(r, 5).Formula = "=IF(C" & r & "=0,0,B" & r & "/C" & r & ")"
+    wsA.Range("B2:D" & r).NumberFormat = "#,##0"
+    wsA.Range("E2:E" & r).NumberFormat = "0.0%"
+    wsA.Range("D2:D" & (r - 1)).FormatConditions.AddColorScale ColorScaleType:=3
+    ModDemo_Util.StyleHeader wsA.Range("A1:F1")
+    wsA.Range("A1:F" & r).Borders.LineStyle = xlContinuous
+    wsA.Columns("A:F").AutoFit
+
+    ' ---- 4) 命名区域 ----
+    wb.Names.Add Name:="收入数据", RefersTo:="='明细数据'!$G$2:$G$" & lastRow
+    wb.Names.Add Name:="预算数据", RefersTo:="='预算'!$C$2:$C$31"
+    wb.Names.Add Name:="达成率", RefersTo:="='汇总'!$J$2:$J$" & (1 + n)
+
+    sumifDiff = Round(sumIfTot - genTotal, 4)
+    budgetDiff = Round(sumIfBudget - budgetTotal, 4)
+    secs = Round(Timer - t0, 3)
+    ModDemo_Util.LogLine "BuildAnalysis", "SUMIF差额=" & sumifDiff & ", 预算差额=" & budgetDiff & ", 耗时=" & secs & "s"
+End Sub
+
+' 参数为 0 的入口：从「步骤」表读精确值（没有就现算）
+Public Sub Step_Analyze()
+    Dim wb As Workbook
+    Set wb = ThisWorkbook
+    Dim genTotal As Double, budgetTotal As Double, dummy As Double
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = wb.Worksheets("步骤")
+    On Error GoTo 0
+    If ws Is Nothing Then
+        genTotal = Application.WorksheetFunction.Sum(wb.Worksheets("明细数据").Columns(7))
+        budgetTotal = Application.WorksheetFunction.Sum(wb.Worksheets("预算").Columns(3))
+        Set ws = ModDemo_Util.EnsureSheet(wb, "步骤")
+    Else
+        genTotal = ws.Range("B1").Value
+        budgetTotal = ws.Range("B2").Value
+    End If
+    Dim d1 As Double, d2 As Double, secs As Double
+    BuildAnalysis wb, genTotal, budgetTotal, d1, d2, secs
+    ws.Range("A4").Value = "SUMIF差额"
+    ws.Range("B4").Value = d1
+    ws.Range("A5").Value = "预算差额"
+    ws.Range("B5").Value = d2
+    ws.Range("A6").Value = "分析耗时"
+    ws.Range("B6").Value = secs
+End Sub

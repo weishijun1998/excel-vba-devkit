@@ -1,0 +1,159 @@
+Option Explicit
+
+' ============================================================
+' ModDemo_Main —— 主控：造数 → 分析 → 呈现 → 对账校验（一条调用链跑完）
+'   校验表把「独立精确合计」与「SUMIF/公式结果」对齐 → 差额必须为 0
+'   注意 RefreshCheckSheet 必须在所有建表动作**之后**调用：
+'   因为 EnsureSheet 会删表重建，先前写的跨表公式会变成 #REF!
+'   （这个坑是断言抓到后才发现的，见工具栏自检记录）
+' ============================================================
+
+Public Sub BuildDemoReport()
+    Dim t0 As Double
+    t0 = Timer
+
+    Dim wb As Workbook
+    Set wb = ThisWorkbook
+    Dim genTotal As Double, budgetTotal As Double
+    Dim sumifDiff As Double, budgetDiff As Double
+    Dim tData As Double, tReport As Double, tFormat As Double
+
+    On Error GoTo EH
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    ' 隐藏窗口的装载器里 Application.Calculation 会 1004 → 用兜底封装（拿不到就按自动）
+    Dim oldCalc As Long
+    oldCalc = ModDemo_Util.CalcManual()
+
+    ModDemo_Util.Status "① 造数：5000 行明细 + 预算表"
+    ModDemo_Data.GenerateData wb, genTotal, budgetTotal, tData
+
+    ModDemo_Util.Status "② 汇总：SUMIF + 透视表 + 差异分析"
+    ModDemo_Report.BuildAnalysis wb, genTotal, budgetTotal, sumifDiff, budgetDiff, tReport
+
+    ModDemo_Util.Status "③ 呈现：格式 + 条件格式 + 2 张图表"
+    ModDemo_Format.ApplyFormat wb, tFormat
+
+    ModDemo_Util.Status "④ 对账校验"
+    RefreshCheckSheet wb, genTotal, budgetTotal, tData, tReport, tFormat, t0
+
+    ModDemo_Util.LogLine "BuildDemoReport", "总耗时=" & Round(Timer - t0, 3) & "s, SUMIF差额=" & sumifDiff & ", 预算差额=" & budgetDiff
+    Exit Sub
+
+EH:
+    On Error Resume Next
+    ModDemo_Util.CalcRestore -1
+    Application.ScreenUpdating = True
+    Application.StatusBar = False
+    ThisWorkbook.Worksheets(1).Range("Z1").Value = "ERR " & Err.Number & ": " & Err.Description
+    ModDemo_Util.LogLine "BuildDemoReport", "ERR " & Err.Number & " | " & Err.Description
+End Sub
+
+' ============================================================
+' 对账校验表：任何阶段重建了工作表之后都要重新刷一次
+' ============================================================
+Public Sub RefreshCheckSheet(ByVal wb As Workbook, ByVal genTotal As Double, ByVal budgetTotal As Double, _
+                             ByVal tData As Double, ByVal tReport As Double, ByVal tFormat As Double, ByVal t0 As Double)
+    Dim wsC As Worksheet
+    Set wsC = ModDemo_Util.EnsureSheet(wb, "校验")
+
+    wsC.Range("A1").Value = "校验项"
+    wsC.Range("B1").Value = "结果"
+    wsC.Range("A2").Value = "明细行数"
+    wsC.Range("B2").Formula = "=COUNTA('明细数据'!A2:A20000)"
+    wsC.Range("A3").Value = "明细收入合计(独立精确值)"
+    wsC.Range("B3").Value = genTotal
+    wsC.Range("A4").Value = "SUMIF对账差额"
+    wsC.Range("B4").Formula = "=ROUND(SUM('明细数据'!G2:G20000)-B3,4)"
+    wsC.Range("A5").Value = "预算对账差额"
+    wsC.Range("B5").Formula = "=ROUND(SUM('预算'!C2:C31)-" & Str$(budgetTotal) & ",4)"
+    wsC.Range("A6").Value = "数据质量"
+    wsC.Range("B6").Formula = "=IF(AND(MIN('明细数据'!E2:E20000)>0,MAX('明细数据'!E2:E20000)<1000),""通过"",""异常"")"
+    wsC.Range("A7").Value = "达成率区间"
+    wsC.Range("B7").Formula = "=IF(AND(MIN('差异分析'!E2:E6)>=0.9,MAX('差异分析'!E2:E6)<=1.1),""通过"",""异常"")"
+    wsC.Range("A9").Value = "阶段耗时-造数"
+    wsC.Range("B9").Value = tData
+    wsC.Range("A10").Value = "阶段耗时-汇总差异"
+    wsC.Range("B10").Value = tReport
+    wsC.Range("A11").Value = "阶段耗时-格式图表"
+    wsC.Range("B11").Value = tFormat
+    wsC.Range("A12").Value = "总耗时(秒)"
+    wsC.Range("B12").Value = Round(Timer - t0, 3)
+    wsC.Range("A14").Value = "工作表数"
+    wsC.Range("B14").Value = wb.Worksheets.Count
+    wsC.Range("A15").Value = "透视表数"
+    wsC.Range("B15").Value = wb.Worksheets("汇总").PivotTables.Count
+    wsC.Range("A16").Value = "图表数"
+    wsC.Range("B16").Value = wb.Worksheets("汇总").ChartObjects.Count
+    wsC.Range("A17").Value = "命名区域数"
+    wsC.Range("B17").Value = wb.Names.Count
+    wsC.Range("A18").Value = "总校验"
+    wsC.Range("B18").Formula = "=IF(AND(B2=5000,B4=0,B5=0,B6=""通过"",B7=""通过""),""PASS"",""FAIL"")"
+
+    wsC.Range("B3").NumberFormat = "#,##0.00"
+    wsC.Range("B4:B5").NumberFormat = "0.0000"
+    ModDemo_Util.StyleHeader wsC.Range("A1:B1")
+    wsC.Columns("A:B").AutoFit
+    On Error Resume Next
+    wsC.Range("B2:B18").FormatConditions.Add Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""FAIL"""
+    wsC.Range("B2:B18").FormatConditions(1).Interior.Color = RGB(255, 199, 206)
+    On Error GoTo 0
+
+    ModDemo_Util.CalcRestoreAndRecalc -1
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+End Sub
+
+' ============================================================
+' 慢放演示：保留屏幕刷新 + 分幕停顿，让人看得见每一步
+' ============================================================
+Public Sub Demo_SlowRun()
+    Dim t0 As Double
+    t0 = Timer
+    Application.ScreenUpdating = True
+    Dim wb As Workbook
+    Set wb = ThisWorkbook
+    Dim genTotal As Double, budgetTotal As Double
+    Dim d1 As Double, d2 As Double
+    Dim tData As Double, tRep As Double, tFmt As Double
+
+    ModDemo_Util.Status "慢放 1/5：造数（5000 行明细 + 预算表）"
+    ShowSheet "明细数据"
+    Pause 1.2
+    ModDemo_Data.GenerateData wb, genTotal, budgetTotal, tData
+    Pause 1.6
+
+    ModDemo_Util.Status "慢放 2/5：汇总（SUMIF + 透视表）"
+    ModDemo_Report.BuildAnalysis wb, genTotal, budgetTotal, d1, d2, tRep
+    ShowSheet "汇总"
+    Pause 2.2
+
+    ModDemo_Util.Status "慢放 3/5：差异分析（实际 vs 预算）"
+    ShowSheet "差异分析"
+    Pause 2.2
+
+    ModDemo_Util.Status "慢放 4/5：格式与两张图表"
+    ModDemo_Format.ApplyFormat wb, tFmt
+    ShowSheet "汇总"
+    Pause 2.2
+
+    ModDemo_Util.Status "慢放 5/5：对账校验"
+    RefreshCheckSheet wb, genTotal, budgetTotal, tData, tRep, tFmt, t0
+    ShowSheet "校验"
+    Pause 2.0
+    ModDemo_Util.LogLine "Demo_SlowRun", "慢放演示完成"
+End Sub
+
+Private Sub Pause(ByVal secs As Double)
+    Dim t As Double
+    t = Timer
+    Do While Timer - t < secs
+        DoEvents
+    Loop
+End Sub
+
+Private Sub ShowSheet(ByVal nm As String)
+    On Error Resume Next
+    ThisWorkbook.Worksheets(nm).Activate
+    On Error GoTo 0
+End Sub

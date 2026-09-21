@@ -1,0 +1,122 @@
+Option Explicit
+
+' ============================================================
+' ModDemo_Data —— 造数层：5000 行明细 + 预算表
+'   全部数组化一次写回；返回「精确合计」供后续对账（独立算出来，不是从表里读的）
+' ============================================================
+
+Public Const ROWS_TOTAL As Long = 5000
+
+Public Sub GenerateData(ByVal wb As Workbook, ByRef genTotal As Double, ByRef budgetTotal As Double, ByRef secs As Double)
+    Dim t0 As Double
+    t0 = Timer
+
+    Dim ws As Worksheet, wsB As Worksheet
+    Set ws = ModDemo_Util.EnsureSheet(wb, "明细数据")
+    Set wsB = ModDemo_Util.EnsureSheet(wb, "预算")
+
+    Dim regions As Variant, channels As Variant, products As Variant, months As Variant
+    regions = Array("华东", "华南", "华北", "西南", "东北")
+    channels = Array("商超", "餐饮", "电商")
+    products = Array("拉格", "小麦", "精酿", "无醇")
+    months = Array("2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06")
+
+    Dim head As Variant, nC As Long
+    head = Array("月份", "区域", "渠道", "产品", "销量(箱)", "单价(元)", "收入(元)", "成本(元)", "毛利(元)")
+    nC = UBound(head) + 1
+
+    Dim arr() As Variant
+    ReDim arr(1 To ROWS_TOTAL + 1, 1 To nC)
+    Dim j As Long
+    For j = 1 To nC
+        arr(1, j) = head(j - 1)
+    Next j
+
+    Dim i As Long, idx As Long
+    Dim m As Long, rg As Long, ch As Long, pr As Long
+    Dim vol As Double, price As Double, rev As Double, cost As Double
+    Dim regionTot(0 To 4) As Double
+    Dim tot As Double
+    tot = 0#
+    For i = 2 To ROWS_TOTAL + 1
+        idx = i - 2
+        m = idx Mod 6
+        rg = (idx \ 6) Mod 5
+        ch = (idx \ 30) Mod 3
+        pr = (idx \ 90) Mod 4
+        vol = 120# + (idx Mod 37) * 3.5 + rg * 8#
+        price = 88# + pr * 12# + ch * 3#
+        rev = vol * price
+        cost = rev * (0.62 + 0.01 * pr)
+        arr(i, 1) = months(m)
+        arr(i, 2) = regions(rg)
+        arr(i, 3) = channels(ch)
+        arr(i, 4) = products(pr)
+        arr(i, 5) = vol
+        arr(i, 6) = price
+        arr(i, 7) = rev
+        arr(i, 8) = cost
+        arr(i, 9) = rev - cost
+        tot = tot + rev
+        regionTot(rg) = regionTot(rg) + rev
+        If idx > 0 And idx Mod 1000 = 0 Then
+            ModDemo_Util.Status "① 造数：生成 " & idx & " / " & ROWS_TOTAL & " 行"
+        End If
+    Next i
+    ModDemo_Util.Status "① 造数：一次性写入工作表…"
+    ModDemo_Util.WriteArray ws, 1, 1, arr
+    genTotal = tot
+
+    ' ---- 预算表：按区域实际规模 × 系数（0.94~1.05），按月加权分摊 ----
+    Dim factors As Variant, weights As Variant
+    factors = Array(0.94, 1.02, 0.97, 1.05, 0.99)
+    weights = Array(1#, 1.02, 1.04, 1.06, 1.08, 1.1)
+    Dim wsum As Double
+    wsum = 0#
+    For m = 0 To 5
+        wsum = wsum + weights(m)
+    Next m
+
+    Dim barr() As Variant
+    ReDim barr(1 To 31, 1 To 3)
+    barr(1, 1) = "区域"
+    barr(1, 2) = "月份"
+    barr(1, 3) = "预算收入(元)"
+    Dim r As Long, b As Double, budgetSum As Double
+    budgetSum = 0#
+    r = 1
+    For rg = 0 To 4
+        For m = 0 To 5
+            r = r + 1
+            b = (regionTot(rg) / factors(rg)) * (weights(m) / wsum)
+            barr(r, 1) = regions(rg)
+            barr(r, 2) = months(m)
+            barr(r, 3) = b
+            budgetSum = budgetSum + b
+        Next m
+    Next rg
+    ModDemo_Util.WriteArray wsB, 1, 1, barr
+    budgetTotal = budgetSum
+
+    ModDemo_Util.StyleHeader ws.Range("A1:I1")
+    ModDemo_Util.StyleHeader wsB.Range("A1:C1")
+    ws.Columns("A:I").AutoFit
+    wsB.Columns("A:C").AutoFit
+
+    secs = Round(Timer - t0, 3)
+    ModDemo_Util.LogLine "GenerateData", ROWS_TOTAL & " 行, 精确合计=" & Format$(tot, "0.00") & ", 耗时=" & secs & "s"
+End Sub
+
+' 参数为 0 的入口：供 run_vba.py 直接 Application.Run
+Public Sub Step_Generate()
+    Dim genTotal As Double, budgetTotal As Double, secs As Double
+    GenerateData ThisWorkbook, genTotal, budgetTotal, secs
+    Dim ws As Worksheet
+    Set ws = ModDemo_Util.EnsureSheet(ThisWorkbook, "步骤")
+    ws.Range("A1").Value = "genTotal"
+    ws.Range("B1").Value = genTotal
+    ws.Range("A2").Value = "budgetTotal"
+    ws.Range("B2").Value = budgetTotal
+    ws.Range("A3").Value = "secs"
+    ws.Range("B3").Value = secs
+End Sub

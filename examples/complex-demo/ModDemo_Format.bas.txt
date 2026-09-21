@@ -1,0 +1,69 @@
+Option Explicit
+
+' ============================================================
+' ModDemo_Format —— 呈现层：样式 / 条件格式 / 自动筛选 / 冻结窗格 / 图表
+'   冻结窗格是「视图」设置：隐藏窗口的装载器里没有 ActiveWindow，
+'   这里用防御写法（On Error Resume Next）演示怎么既好看又跑得动
+' ============================================================
+
+Public Sub ApplyFormat(ByVal wb As Workbook, ByRef secs As Double)
+    Dim t0 As Double
+    t0 = Timer
+
+    Dim wsD As Worksheet, wsS As Worksheet, wsA As Worksheet
+    Set wsD = wb.Worksheets("明细数据")
+    Set wsS = wb.Worksheets("汇总")
+    Set wsA = wb.Worksheets("差异分析")
+
+    Dim lastRow As Long
+    lastRow = wsD.Cells(wsD.Rows.Count, 1).End(xlUp).row
+
+    ' ---- 明细表 ----
+    With wsD.Range("A1:I" & lastRow)
+        .Borders.LineStyle = xlContinuous
+        .Borders.Weight = xlThin
+        .Font.Size = 10
+    End With
+    ModDemo_Util.StyleHeader wsD.Range("A1:I1")
+    wsD.Range("E2:E" & lastRow).NumberFormat = "#,##0"
+    wsD.Range("F2:F" & lastRow).NumberFormat = "0.00"
+    wsD.Range("G2:I" & lastRow).NumberFormat = "#,##0"
+    wsD.Range("G2:G" & lastRow).FormatConditions.AddColorScale ColorScaleType:=3
+    wsD.Range("A1:I1").AutoFilter
+    wsD.Columns("A:I").AutoFit
+
+    ' ---- 差异分析表：差异列三色阶 ----
+    wsA.Range("D2:D6").FormatConditions.AddColorScale ColorScaleType:=3
+    wsA.Range("A1:F6").Borders.LineStyle = xlContinuous
+
+    ' ---- 图表 1：柱状（各区域收入）----
+    Dim ch As ChartObject
+    Set ch = wsS.ChartObjects.Add(320, 250, 460, 230)
+    ch.Chart.SetSourceData Source:=wsS.Range("F1:G6")
+    ch.Chart.ChartType = xlColumnClustered
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "各区域收入合计（元）"
+
+    ' ---- 图表 2：折线（各区域预算达成率）----
+    Dim ch2 As ChartObject
+    Set ch2 = wsS.ChartObjects.Add(320, 500, 460, 230)
+    ch2.Chart.SetSourceData Source:=Union(wsS.Range("F1:F6"), wsS.Range("J1:J6"))
+    ch2.Chart.ChartType = xlLineMarkers
+    ch2.Chart.HasTitle = True
+    ch2.Chart.ChartTitle.Text = "各区域预算达成率"
+
+    ' ---- 冻结窗格（防御：隐藏窗口下没有 ActiveWindow）----
+    On Error Resume Next
+    wsD.Activate
+    wsD.Range("A2").Select
+    ActiveWindow.FreezePanes = True
+    On Error GoTo 0
+
+    secs = Round(Timer - t0, 3)
+    ModDemo_Util.LogLine "ApplyFormat", "耗时=" & secs & "s"
+End Sub
+
+Public Sub Step_Format()
+    Dim secs As Double
+    ApplyFormat ThisWorkbook, secs
+End Sub

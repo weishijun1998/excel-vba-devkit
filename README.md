@@ -54,8 +54,20 @@ The bundled template uses Chinese sheet names — `明细数据` (data) / `汇�
 ```bash
 python tools/vba/dismiss_vba_dialog.py        # clear a stuck VBA error dialog (4 escalating strategies)
 python tools/vba/vba_attr_probe.py            # reproduce / verify the Attribute-line false failure
+python tools/vba/bare_name_scope_probe.py     # which macro-name call styles fail on a hidden-window loader
+python tools/vba/hidden_app_props_probe.py    # hidden window: Application.Calculation raises 1004, 9 other settings do not
 python tools/vba/vba_guard.py <excel_pid> 60  # attach the guard to one long-running macro
 ```
+
+### D. Reproduce the whole toolchain on a demo project
+
+`examples/complex-demo/` is a complete 6-module project (5 000 rows, budget sheet, SUMIF
+reconciliation, PivotTable, 2 charts, named ranges, a slow-motion entry point, an array-vs-cell
+benchmark) plus a set of **deliberately broken** modules. Six stages cover injection →
+assertions → guard (hang / runaway / long-but-alive) → interceptors (real `MsgBox` blocked,
+comment-only allowed) → hidden-window loader (1004 landmine, then the qualified fix) → the
+standalone probes. Each stage lists its expected result, and the fresh-read check proves the
+assertions are not reading stale values. Start at `examples/complex-demo/README.md`.
 
 ---
 
@@ -69,6 +81,10 @@ python tools/vba/vba_guard.py <excel_pid> 60  # attach the guard to one long-run
 | `tools/vba/vba_guard.py` | **Guard**: dismiss dialogs (clicks the id **4800** "End" button) / idle-hang verdict / runaway-CPU verdict / heartbeat protection |
 | `tools/vba/dismiss_vba_dialog.py` | One-shot cleanup of stuck dialogs (BM_CLICK → WM_COMMAND → real mouse → kill) |
 | `tools/vba/vba_attr_probe.py` | Attribute-line probe (reproduces the `0x800A03EC` false failure) |
+| `tools/vba/bare_name_scope_probe.py` | Probe: which macro-name call styles fail on a hidden-window loader (5 cases, self-contained) |
+| `tools/vba/hidden_app_props_probe.py` | Probe: on a hidden-window loader `Application.Calculation` raises 1004 — 9 other common settings are unaffected |
+| `tools/vba/scan_hidden_windows.py` | Static scan of a folder/file for workbooks whose window is hidden **on disk** (reads `xl/workbook.xml`, no Excel needed) |
+| `examples/complex-demo/` | Full 6-module demo project + fault modules — a smoke test for every layer of the toolchain (see its README) |
 | `tools/validate.py` | Self-check: script syntax + skill/instruction frontmatter + no personal paths or key prefixes |
 | `tools/vba/mcp_server.py` | Zero-dependency MCP server: `excel_status` (read-only) / `run_vba` / `dismiss_dialog` |
 | `.github/skills/excel-vba-automation/` | **The Agent Skill**: rules, failure matrix, error attribution, dev loop (+ Chinese version in `references/`) |

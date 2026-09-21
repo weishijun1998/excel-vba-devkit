@@ -1,0 +1,22 @@
+Option Explicit
+
+' ============================================================
+' ModFault_Hang —— 故意做成「卡死」的宏，用来验证守卫真的会兜住
+'   Fault_IdleHang  : 0 CPU 阻塞消息泵 → 应判 IDLE_HUNG
+'   Fault_Runaway   : 死循环跑飞    → 应判 RUNAWAY_CPU
+' ============================================================
+
+Public Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal ms As Long)
+
+Public Sub Fault_IdleHang()
+    Sleep 30000
+    ThisWorkbook.Worksheets(1).Range("Y1").Value = "不该走到这里"
+End Sub
+
+Public Sub Fault_Runaway()
+    Dim x As Long
+    Do While True
+        x = 1
+        x = x + 1
+    Loop
+End Sub

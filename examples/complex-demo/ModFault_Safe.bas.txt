@@ -1,0 +1,26 @@
+Option Explicit
+
+' ============================================================
+' ModFault_Safe —— 「看起来危险、其实安全」与「长任务但在推进」
+'   Fault_CommentOnly   : 注释/字符串里出现危险字样 → 应被放行
+'   Fault_LongButAlive  : 12 秒长任务但泵消息 + 报进度 → 不该被误杀
+' ============================================================
+
+Public Sub Fault_CommentOnly()
+    ' 说明：这里绝不能写 Me.Show 0，注释里的危险字样不该被误判
+    Dim s As String
+    s = "提示语里提到 MsgBox 也只是文字"
+    ThisWorkbook.Worksheets(1).Range("Y2").Value = s
+End Sub
+
+Public Sub Fault_LongButAlive()
+    Dim t As Double, i As Long
+    t = Timer
+    Do While Timer - t < 12
+        i = i + 1
+        Application.StatusBar = "长任务推进中… 第 " & i & " 轮（泵消息，未卡死）"
+        DoEvents
+    Loop
+    Application.StatusBar = False
+    ThisWorkbook.Worksheets(1).Range("Y3").Value = "long-but-alive 完成，循环 " & i & " 轮"
+End Sub

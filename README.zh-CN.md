@@ -52,8 +52,19 @@ python tools/vba/run_vba.py \
 ```bash
 python tools/vba/dismiss_vba_dialog.py        # 一键清掉卡住的 VBA 报错弹窗（四种关法逐级降级）
 python tools/vba/vba_attr_probe.py            # 复现/验证 Attribute 行导致的"宏不可用"
+python tools/vba/bare_name_scope_probe.py     # 五种调用方式实测：哪些需要限定宏名
+python tools/vba/hidden_app_props_probe.py    # 窗口隐藏时只有 Application.Calculation 报 1004
 python tools/vba/vba_guard.py <excel_pid> 60  # 单独挂守卫看一个长任务
 ```
+
+### D. 用一个演示工程把整条工具链跑一遍
+
+`examples/complex-demo/` 是一个完整的 6 模块工程（5000 行数据、预算表、SUMIF 对账、
+透视表、2 张图表、命名区域、慢放入口、数组写 vs 逐格写基准），外加一组**故意做坏**的模块。
+六个阶段依次覆盖：注入 → 断言 → 守卫（假死 / 跑飞 / 长任务不误杀）→ 拦截器（真 `MsgBox`
+被拦、只出现在注释里的放行）→ 隐藏窗口装载器（1004 真地雷 → 限定写法修好）→ 独立探针。
+每个阶段都写了预期结果，"塞假值再复跑"那步专门证明断言读到的是新值。
+入口在 `examples/complex-demo/README.md`。
 
 ---
 
@@ -67,6 +78,10 @@ python tools/vba/vba_guard.py <excel_pid> 60  # 单独挂守卫看一个长任�
 | `tools/vba/vba_guard.py` | **守卫**：弹窗点掉（点 id **4800**"结束"按钮）/ 假死判定 / 跑飞判定 / 心跳保护 |
 | `tools/vba/dismiss_vba_dialog.py` | 卡住弹窗一键清理（BM_CLICK → WM_COMMAND → 真实鼠标 → 杀进程） |
 | `tools/vba/vba_attr_probe.py` | Attribute 行探针（复现 `0x800A03EC` 假故障） |
+| `tools/vba/bare_name_scope_probe.py` | 探针：五种调用方式里哪些在隐藏窗口装载器上会失败（自带临时文件，不碰用户文件） |
+| `tools/vba/hidden_app_props_probe.py` | 探针：窗口隐藏时 `Application.Calculation` 报 1004，其余 9 项常用设置正常 |
+| `tools/vba/scan_hidden_windows.py` | 静态巡检：不打开 Excel 就能看出哪些工作簿的窗口**在磁盘上就是隐藏的**（读 `xl/workbook.xml`） |
+| `examples/complex-demo/` | 完整 6 模块演示工程 + 故障模块 —— 用来回归整条工具链（见其 README） |
 | `tools/validate.py` | 自检：脚本语法 + 技能/指令 frontmatter + 无个人路径与密钥前缀 |
 | `tools/vba/mcp_server.py` | **零依赖** MCP server：`excel_status`（只读）/ `run_vba` / `dismiss_dialog` |
 | `.github/skills/excel-vba-automation/` | **技能本体**：铁律、失败矩阵、错误归因、开发循环（中文完整版在 `references/zh-CN.md`） |

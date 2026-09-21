@@ -1,0 +1,99 @@
+Option Explicit
+
+' ============================================================
+' ModDemo_Util —— 工具层：日志 / 建表 / 数组写回 / 表头样式 / 状态栏
+'   注意：本工程一律用 ThisWorkbook / 显式对象，**不出现裸 ActiveSheet**
+'   （这正是工具链铁律第 3 条：窗口隐藏时裸引用必炸）
+' ============================================================
+
+Public Sub LogLine(ByVal modName As String, ByVal msg As String)
+    Dim p As String, n As Integer
+    p = Environ$("TEMP") & "\demo_run.log"
+    n = FreeFile
+    On Error Resume Next
+    Open p For Append As #n
+    Print #n, Format$(Now, "yyyy-mm-dd hh:nn:ss") & " | " & modName & " | " & msg
+    Close #n
+    On Error GoTo 0
+End Sub
+
+Public Function EnsureSheet(ByVal wb As Workbook, ByVal sheetName As String) As Worksheet
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = wb.Worksheets(sheetName)
+    On Error GoTo 0
+    If Not ws Is Nothing Then
+        Application.DisplayAlerts = False
+        ws.Delete
+        Application.DisplayAlerts = True
+    End If
+    Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    ws.Name = sheetName
+    Set EnsureSheet = ws
+End Function
+
+Public Sub WriteArray(ByVal ws As Worksheet, ByVal row0 As Long, ByVal col0 As Long, ByVal arr As Variant)
+    Dim nR As Long, nC As Long
+    nR = UBound(arr, 1) - LBound(arr, 1) + 1
+    nC = UBound(arr, 2) - LBound(arr, 2) + 1
+    ws.Range(ws.Cells(row0, col0), ws.Cells(row0 + nR - 1, col0 + nC - 1)).Value = arr
+End Sub
+
+Public Sub StyleHeader(ByVal rng As Range)
+    With rng
+        .Font.Bold = True
+        .Interior.Color = RGB(31, 78, 121)
+        .Font.Color = RGB(255, 255, 255)
+        .HorizontalAlignment = xlCenter
+    End With
+End Sub
+
+Public Sub Status(ByVal msg As String)
+    Application.StatusBar = msg
+End Sub
+
+' ============================================================
+' 计算模式兜底：**隐藏窗口的装载器里 Application.Calculation 赋值会 1004**
+'   （实测 10 项常用设置里只有它炸；ScreenUpdating/DisplayAlerts/StatusBar/
+'    EnableEvents 都正常）→ 它只是提速开关，不是正确性依赖：
+'    一律 On Error 兜住，拿不到就按「自动」处理，最坏只是慢一点
+' ============================================================
+Public Function CalcManual() As Long
+    Dim old As Long
+    old = -1                                  ' -1 = 未知/保持自动
+    On Error Resume Next
+    old = Application.Calculation
+    Application.Calculation = xlCalculationManual
+    If Err.Number <> 0 Then
+        Err.Clear
+        old = -1
+    End If
+    On Error GoTo 0
+    CalcManual = old
+End Function
+
+Public Sub CalcRestore(ByVal old As Long)
+    On Error Resume Next
+    If old = -1 Then
+        Application.Calculation = xlCalculationAutomatic
+    Else
+        Application.Calculation = old
+    End If
+    On Error GoTo 0
+End Sub
+
+Public Sub CalcRestoreAndRecalc(ByVal old As Long)
+    On Error Resume Next
+    If old = -1 Then
+        Application.Calculation = xlCalculationAutomatic
+    Else
+        Application.Calculation = old
+    End If
+    Err.Clear
+    Application.CalculateFull
+    If Err.Number <> 0 Then
+        Err.Clear
+        Application.Calculate
+    End If
+    On Error GoTo 0
+End Sub

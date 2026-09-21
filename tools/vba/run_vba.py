@@ -575,13 +575,17 @@ def main():
         log("已移除本次注入的模块: %s" % ("、".join(removed) or "（无）"))
     else:
         report["left_modules"] = injected
-    if args.save and report["excel_alive"]:
+    if killed:
+        # 进程已被守卫终结：COM 已断，收尾保存/关闭只会打印「RPC 服务器不可用」这类噪音。
+        # 运行前已经保存过一次（第 6 步）→ 丢的只是本次运行未落盘的部分，这正是「运行前保存」的意义。
+        log("ℹ 守卫已结束 Excel 进程 → 跳过收尾保存/关闭（运行前已保存过一次）")
+    elif args.save and report["excel_alive"]:
         try:
             wb.Save()
             report["saved"] = True
         except Exception as e:
             log("⚠ 收尾保存失败: %r" % (e,))
-    if not args.keep_open and report["excel_alive"] and not report["reused_instance"]:
+    if not killed and not args.keep_open and report["excel_alive"] and not report["reused_instance"]:
         try:
             try:
                 wb.Close(bool(args.save))     # 说好不存就不存（原来是无条件 Close(True)，会静默写入测试模块）

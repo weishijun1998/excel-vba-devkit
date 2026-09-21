@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""本地自检 / CI 用：脚本语法 + 技能与指令文件的 frontmatter 规范。
+"""本地自检 / CI 用：脚本语法 + 技能与指令文件的 frontmatter 规范 + 密钥/个人路径 + 文风。
 
 用法： python tools/validate.py
 退出码：0=全部通过；1=有失败
 
 为什么需要它：技能/指令文件的 frontmatter 写错（缺 name/description、目录名与 name 不一致、
 用 `org/` 前缀）会导致 **Copilot 静默不加载**，不报错、很难查。这个检查能提前抓到。
+另外两层护栏同样重要：① 提交前拦个人路径/密钥特征；② `.github/**` 是**模型可读**文本，
+比喻与口语标记（"面孔""地雷""兜住"）只增加歧义，由 check_prose() 拦住。
 """
 
 import os
@@ -121,6 +123,45 @@ def check_secrets():
         oks.append("内容 OK  无个人路径/密钥特征")
 
 
+def check_prose():
+    """文风检查：`.github/**` 下的技能 / 指令 / 提示词是**模型可读**的上下文。
+
+    比喻（"第二张面孔""地雷""被咬""兜住"）与口语（"跑得好好的""白折腾"）只增加
+    解码成本与歧义，不增加信息；应写成字面表述（"同一成因的第二种表现""失败""On Error
+    包裹"）。人读的文档（README.md、examples/*/README.md，与本目录无关）不受此限制。
+    确需保留的单个句子可在该行加 `lang-ok` 豁免。
+    """
+    patterns = [
+        (re.compile(r"面孔|地雷|被咬|兜住|踩坑|白折腾|跑得好好的|头号|偷偷|全毁|会炸"
+                    r"|一眼看出|一记|钉死|挂死|最隐蔽"), "比喻/口语"),
+        (re.compile(r"\b(landmine|landmines|sneakiest)\b|second face|third face|bites\b",
+                    re.I), "metaphor"),
+    ]
+    targets = []
+    for sub in ("skills", "instructions", "prompts"):
+        for root, dirs, files in os.walk(os.path.join(ROOT, ".github", sub)):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            targets += [os.path.join(root, f) for f in files if f.endswith(".md")]
+    hits = 0
+    for p in targets:
+        rel = os.path.relpath(p, ROOT)
+        try:
+            lines = open(p, encoding="utf-8", errors="ignore").read().splitlines()
+        except Exception:
+            continue
+        for i, line in enumerate(lines, 1):
+            if "lang-ok" in line:
+                continue
+            for rx, why in patterns:
+                m = rx.search(line)
+                if m:
+                    fails.append("%s:%d 命中%s标记 %r（改成字面表述，或该行加 lang-ok 豁免）"
+                                 % (rel, i, why, m.group(0)))
+                    hits += 1
+    if hits == 0:
+        oks.append("文风 OK  %d 个模型可读文件无比喻/口语标记" % len(targets))
+
+
 def main():
     py_files = []
     for root, dirs, files in os.walk(os.path.join(ROOT, "tools")):
@@ -131,6 +172,7 @@ def main():
     check_md_dir("instructions", ".instructions.md")
     check_md_dir("prompts", ".prompt.md")
     check_secrets()
+    check_prose()
 
     for line in oks:
         print("  " + line)

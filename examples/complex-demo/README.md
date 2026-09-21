@@ -103,7 +103,7 @@ python tools/vba/run_vba.py --workbook build/demo.xlsm --save \
   --run Fault_CommentOnly
 ```
 
-## Stage 5 — hidden-window loader (the three faces)
+## Stage 5 — hidden-window loader (three symptoms, one cause)
 
 Turn a copy of the workbook into a loader: open it, set `wb.Windows(1).Visible = False`, save.
 Then:
@@ -111,7 +111,7 @@ Then:
 ```bash
 python tools/vba/vba_diagnose.py build/loader.xlsm          # static: hidden window + unqualified refs
 
-# unqualified reference → the real landmine: 1004, dialog auto-dismissed, error text read from it
+# unqualified reference → 1004, dialog auto-dismissed, the error text is read from it
 python tools/vba/run_vba.py --workbook build/loader.xlsm --save --visible \
   --code ModFault_Unqualified=examples/complex-demo/ModFault_Unqualified.bas.txt \
   --run Fault_BadRef

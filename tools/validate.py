@@ -6,7 +6,7 @@
 退出码：0=全部通过；1=有失败
 
 为什么需要它：技能/指令文件的 frontmatter 写错（缺 name/description、目录名与 name 不一致、
-用 `org/` 前缀）会导致 **Copilot 静默不加载**，不报错、很难查。这个检查能提前抓到。
+用 `org/` 前缀）会导致**宿主静默不加载**，不报错、很难查。这个检查能提前抓到。
 另外两层护栏同样重要：① 提交前拦个人路径/密钥特征；② `.github/**` 是**模型可读**文本，
 比喻与口语标记（"面孔""地雷""兜住"）只增加歧义，由 check_prose() 拦住。
 """
@@ -64,7 +64,7 @@ def check_skills():
         if not fm.get("name"):
             fails.append("%s 缺少 name" % rel)
         elif fm["name"] != name:
-            fails.append("%s 的 name=%r 与目录名 %r 不一致（Copilot 会静默不加载）" % (rel, fm["name"], name))
+            fails.append("%s 的 name=%r 与目录名 %r 不一致（宿主会静默不加载）" % (rel, fm["name"], name))
         elif "/" in fm["name"] or ":" in fm["name"]:
             fails.append("%s 的 name 含 / 或 : （会导致静默加载失败）" % rel)
         if not fm.get("description"):

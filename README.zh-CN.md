@@ -1,13 +1,15 @@
-# VBA Copilot Kit
+# Excel VBA Devkit
 
-[![ci](https://github.com/weishijun1998/vba-copilot-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/weishijun1998/vba-copilot-kit/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![ci](https://github.com/weishijun1998/excel-vba-devkit/actions/workflows/ci.yml/badge.svg)](https://github.com/weishijun1998/excel-vba-devkit/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [English](README.md) ｜ **中文**
 
 这是一组放进仓库就能用的文件：让 AI 会写 Excel VBA 宏，能把它跑起来，也能看懂运行结果。
 环境要求：Windows + 桌面版 Excel + Python，只装两个依赖（`pywin32`、`psutil`）。
 
-主要面向 VS Code + GitHub Copilot，也支持任何能读 Agent Skills（`SKILL.md`）或接入 MCP 的宿主。
+没有 AI 也能用：`tools/vba/` 里的工具是纯 Python，直接在终端跑。技能部分就是普通的
+`SKILL.md` markdown，任何 AI 宿主都能加载 —— VS Code + GitHub Copilot、Claude Code、Codex、
+Hermes，以及其它能读技能或接入 MCP 的宿主。
 
 用法就是一个循环：
 
@@ -52,9 +54,9 @@ Excel: 新建实例 | pid=42552 | 工作簿=demo.xlsm
 
 ## 安装
 
-1. 把 `tools/`、`.github/`、`.vscode/` 复制到你的仓库根目录
+1. 把 `tools/` 和 `.github/` 复制到你的仓库根目录（用 VS Code 的话，再复制 `.vscode/`）
 2. `pip install -r tools/vba/requirements.txt`
-3. 在 VS Code 的 Chat 里输入 `/skills`，应能看到 `excel-vba-automation`；输入 `/` 能看到 `/vba-dev`（英文）和 `/vba-dev-zh`（中文）
+3. 在你的 AI 宿主里加载技能。用 VS Code + Copilot：在 Chat 里输入 `/skills` 应能看到 `excel-vba-automation`，输入 `/` 能看到 `/vba-dev`（英文）和 `/vba-dev-zh`（中文）。用其它宿主：把 `.github/skills/excel-vba-automation/` 复制到该宿主的技能目录（目录名各宿主不同，文件本身是标准的 `SKILL.md`）。
 
 技能目录名必须与 `SKILL.md` 里的 `name:` 一致，且不能含 `/` 或 `:`，否则会加载失败，而且不会有任何报错。
 
@@ -62,13 +64,13 @@ Excel: 新建实例 | pid=42552 | 工作簿=demo.xlsm
 
 ## 用法
 
-### A. 让 Copilot 自己开发
+### A. 让 AI 自己开发
 
-在 Copilot Chat 的 **agent 模式**里说：
+在你用的 AI 聊天窗口里说（下面以 VS Code + GitHub Copilot 的 agent 模式为例）：
 
 > 用 excel-vba-automation 技能帮我写一个宏：把"月度数据"表按公司汇总，加透视表和柱状图，并跑测试验证。
 
-Copilot 会按 `SKILL.md` 里的循环走：写代码 → `python tools/vba/run_vba.py …` → 读报告 → 修 → 重跑。
+它会按 `SKILL.md` 里的循环走：写代码 → `python tools/vba/run_vba.py …` → 读报告 → 修 → 重跑。
 
 ### B. 自己在终端跑
 
@@ -129,8 +131,8 @@ python tools/vba/vba_guard.py <excel_pid> 60  # 把守卫挂到一个已运行�
 | `.github/skills/excel-vba-automation/` | 技能本体：铁律、失败矩阵、错误归因、开发循环（中文完整版在 `references/`） |
 | `.github/skills/…/templates/` | 可用模板：多维汇总（建表 / 格式 / 透视表 / 图表 / 对账校验） |
 | `.github/instructions/vba.instructions.md` | 按文件类型生效的常驻规则（`applyTo` 指向 `.bas` / `.vba` / `tools/vba/**`） |
-| `.github/prompts/` | `/vba-dev`（英文）与 `/vba-dev-zh`（中文）：写宏 → 测试 → 修 循环 |
-| `.vscode/mcp.json` | （可选）把 `run_vba` 注册成 Copilot 的一等工具 |
+| `.github/prompts/` | `/vba-dev`（英文）与 `/vba-dev-zh`（中文）：写宏 → 测试 → 修 循环（VS Code + Copilot 的斜杠命令） |
+| `.vscode/mcp.json` | （可选，VS Code）通过 MCP 把 `run_vba` 注册成一等工具 |
 
 ---
 

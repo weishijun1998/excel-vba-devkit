@@ -1,14 +1,15 @@
-# VBA Copilot Kit
+# Excel VBA Devkit
 
-[![ci](https://github.com/weishijun1998/vba-copilot-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/weishijun1998/vba-copilot-kit/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![ci](https://github.com/weishijun1998/excel-vba-devkit/actions/workflows/ci.yml/badge.svg)](https://github.com/weishijun1998/excel-vba-devkit/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **English** ｜ [中文说明](README.zh-CN.md)
 
 Files you drop into a repo so an AI can write Excel VBA macros, run them, and read back what
 happened. Windows + desktop Excel + Python; two dependencies (`pywin32`, `psutil`).
 
-Built for VS Code + GitHub Copilot; also works with any host that reads Agent Skills
-(`SKILL.md`) or speaks MCP.
+No AI required: the tools in `tools/vba/` are plain Python and run from a terminal. The skill is
+plain `SKILL.md` markdown, so any agent host can load it — VS Code + GitHub Copilot, Claude Code,
+Codex, Hermes, or anything else that reads skills or speaks MCP.
 
 The loop is the whole idea:
 
@@ -55,12 +56,12 @@ Console output is Chinese, with ASCII fallback (`--ascii`) for terminals that ca
 
 ## Install
 
-1. Copy `tools/`, `.github/`, `.vscode/` into your repo root
+1. Copy `tools/` and `.github/` into your repo root (add `.vscode/` too if you use VS Code)
 2. `pip install -r tools/vba/requirements.txt`
-3. In VS Code Chat type `/skills` — `excel-vba-automation` should be listed; `/` lists `/vba-dev` (EN) and `/vba-dev-zh` (中文)
+3. Load the skill in your host. With VS Code + Copilot, type `/skills` in Chat — `excel-vba-automation` should be listed, and `/` lists `/vba-dev` (EN) and `/vba-dev-zh` (中文). With another agent, copy `.github/skills/excel-vba-automation/` into that host's skills directory (the folder name differs per host; the file itself is standard `SKILL.md`).
 
 The skill directory name must equal `name:` inside `SKILL.md`, and contain no `/` or `:` —
-otherwise it fails to load without saying anything.
+otherwise the host fails to load it without saying anything.
 
 ---
 
@@ -68,11 +69,11 @@ otherwise it fails to load without saying anything.
 
 ### A. Let the agent drive
 
-In Copilot Chat (**agent** mode):
+In your agent's chat — the example below is VS Code + GitHub Copilot in **agent** mode:
 
 > Use the excel-vba-automation skill to write a macro that aggregates the "Monthly" sheet by company, adds a PivotTable and a column chart, and verifies itself with tests.
 
-Copilot follows the loop in `SKILL.md`: write → `python tools/vba/run_vba.py …` → read the report → fix → re-run.
+The agent follows the loop in `SKILL.md`: write → `python tools/vba/run_vba.py …` → read the report → fix → re-run.
 
 ### B. Drive it yourself
 
@@ -135,8 +136,8 @@ it writes `STALE` into a checkpoint cell, re-runs the macro, and expects `PASS` 
 | `.github/skills/excel-vba-automation/` | The skill itself: rules, failure matrix, error attribution, dev loop (Chinese version in `references/`) |
 | `.github/skills/…/templates/` | A working multi-dimensional summary template (sheets, formats, PivotTable, chart, reconciliation checks) |
 | `.github/instructions/vba.instructions.md` | Always-on rules for `.bas` / `.vba` / `tools/vba/**` |
-| `.github/prompts/` | `/vba-dev` (EN) and `/vba-dev-zh` (中文): the write → test → fix loop |
-| `.vscode/mcp.json` | (optional) registers `run_vba` as a first-class Copilot tool |
+| `.github/prompts/` | `/vba-dev` (EN) and `/vba-dev-zh` (中文): the write → test → fix loop (VS Code + Copilot slash commands) |
+| `.vscode/mcp.json` | (optional, VS Code) registers `run_vba` as a first-class tool over MCP |
 
 ---
 
@@ -189,7 +190,7 @@ Windows 11, Microsoft 365 desktop Excel, Python 3.11:
 
 I work with Excel files that are large, formula-heavy and old — the kind where a mistake is
 expensive and "just re-run it" isn't obvious. What I wanted from an AI was not macro code, but a
-macro that runs and proves it ran. This kit is the pipeline that came out of that: a guard, a
+macro that runs and proves it ran. This devkit is the pipeline that came out of that: a guard, a
 report, and a list of the ways automation fails that no amount of careful prompting fixes.
 
 ## License

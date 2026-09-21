@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """vba-kit MCP server —— 零依赖（只用 Python 标准库），stdio + 逐行 JSON-RPC 2.0。
 
-暴露三个工具给 VS Code Copilot / 任何 MCP 客户端：
+暴露三个工具给任何 MCP 客户端：
   excel_status    只读：列出运行中的 Excel 实例，以及是否有卡住的弹窗
   run_vba         跑 run_vba.py：注入 → 守卫 → 运行 → 强制重算 → 断言 → 报告
   dismiss_dialog  清理卡住的 VBA 报错弹窗（BM_CLICK → WM_COMMAND → 真实鼠标 → 杀进程）

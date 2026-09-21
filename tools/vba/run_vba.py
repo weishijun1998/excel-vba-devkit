@@ -486,7 +486,10 @@ def main():
         report["excel_alive"] = None
 
     # ---- 7.5) 断言前强制重算：否则新写的公式可能读到未计算的陈旧值（假失败）----
-    if report["excel_alive"]:
+    if killed:
+        # 进程刚被守卫终结：COM 连接已断，这时再去重算只会打印一个看不懂的内部异常
+        log("ℹ 守卫已结束 Excel 进程 → 跳过强制重算与断言（结论以杀进程前的状态为准）")
+    elif report["excel_alive"]:
         done = False
         for meth in ("CalculateFull", "CalculateFullRebuild", "Calculate"):
             try:

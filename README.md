@@ -4,19 +4,18 @@
 
 **English** ｜ [中文说明](README.zh-CN.md)
 
-Files you drop into a repo so an AI can write Excel VBA macros, run them, and read back what
-happened. Windows + desktop Excel + Python; two dependencies (`pywin32`, `psutil`).
+Excel VBA Devkit is a set of Python tools plus an agent skill for developing Excel VBA
+macros on Windows. The tools run a macro in a real Excel instance, dismiss error dialogs,
+stop hangs, and print a report: verdict, real error text, and the result of every assertion.
 
-No AI required: the tools in `tools/vba/` are plain Python and run from a terminal. The skill is
-plain `SKILL.md` markdown, so any agent host can load it — VS Code + GitHub Copilot, Claude Code,
-Codex, Hermes, or anything else that reads skills or speaks MCP.
+With that report, an AI can iterate by itself: write, run, read, fix, run again. The skill
+uses the standard `SKILL.md` format and loads into VS Code + GitHub Copilot, Claude Code,
+Codex, Hermes, or any other host that reads skills or connects over MCP. The tools are plain
+Python and run from a terminal; no AI required.
 
-The loop is the whole idea:
+Requirements: Windows, desktop Excel, and Python with `pywin32` and `psutil` installed.
 
-> write a macro → `run_vba.py` runs it → verdict + real error text + per-assertion results → fix → run again
-
-That's what lets an agent iterate without you sitting there clicking error dialogs. A six-module
-demo chain (5 000 rows, PivotTable, 2 charts) ends like this:
+A six-module demo project (5,000 rows, PivotTable, 2 charts) ends like this:
 
 ```text
 Excel: 新建实例 | pid=42552 | 工作簿=demo.xlsm
@@ -35,8 +34,8 @@ Excel: 新建实例 | pid=42552 | 工作簿=demo.xlsm
 === 总结: 全部通过 ✅ ===
 ```
 
-When it fails, the report names the failure — dialog text included, because a dismissed dialog
-is otherwise invisible:
+When something fails, the report says which kind of failure it was and includes the dialog
+text; once a dialog is dismissed, that text is the only record left:
 
 ```text
 结论: ❌ VBA 报错（弹窗已自动点掉，Excel 存活）
@@ -50,32 +49,32 @@ is otherwise invisible:
 守卫: ['VERDICT IDLE_HUNG elapsed=6.5s cpu_delta=1.0s -> KILLED pid=4112']
 ```
 
-Console output is Chinese, with ASCII fallback (`--ascii`) for terminals that can't render it.
-
----
+Console output is Chinese by default. For terminals that cannot display it, `--ascii`
+forces plain-ASCII output.
 
 ## Install
 
-1. Copy `tools/` and `.github/` into your repo root (add `.vscode/` too if you use VS Code)
-2. `pip install -r tools/vba/requirements.txt`
-3. Load the skill in your host. With VS Code + Copilot, type `/skills` in Chat — `excel-vba-automation` should be listed, and `/` lists `/vba-dev` (EN) and `/vba-dev-zh` (中文). With another agent, copy `.github/skills/excel-vba-automation/` into that host's skills directory (the folder name differs per host; the file itself is standard `SKILL.md`).
+1. Copy `tools/` and `.github/` into your repo root. If you use VS Code, copy `.vscode/` too.
+2. Install the two dependencies: `pip install -r tools/vba/requirements.txt`
+3. Load the skill in your host:
+   - VS Code + GitHub Copilot: type `/skills` in Chat; `excel-vba-automation` should be listed. Typing `/` also shows the two prompts, `/vba-dev` (English) and `/vba-dev-zh` (Chinese).
+   - Other hosts: copy `.github/skills/excel-vba-automation/` into that host's skills directory. The directory name varies by host; the file inside is standard `SKILL.md`.
 
-The skill directory name must equal `name:` inside `SKILL.md`, and contain no `/` or `:` —
-otherwise the host fails to load it without saying anything.
+One gotcha: the skill directory name must equal the `name:` field inside `SKILL.md` and must
+not contain `/` or `:`. Otherwise the host fails to load it, without a message.
 
----
+## Usage
 
-## Use it
+### From an AI chat
 
-### A. Let the agent drive
-
-In your agent's chat — the example below is VS Code + GitHub Copilot in **agent** mode:
+In agent mode (the example below is VS Code + GitHub Copilot):
 
 > Use the excel-vba-automation skill to write a macro that aggregates the "Monthly" sheet by company, adds a PivotTable and a column chart, and verifies itself with tests.
 
-The agent follows the loop in `SKILL.md`: write → `python tools/vba/run_vba.py …` → read the report → fix → re-run.
+The agent then follows the loop from `SKILL.md`: write the macro, run
+`python tools/vba/run_vba.py ...`, read the report, fix, run again.
 
-### B. Drive it yourself
+### From a terminal
 
 ```bash
 python tools/vba/run_vba.py \
@@ -86,116 +85,100 @@ python tools/vba/run_vba.py \
   --save --keep-open
 ```
 
-Exit codes: `0` all passed ｜ `1` failures ｜ `2` refused to run (dangerous code).
-
-- Events are off by default (`EnableEvents=False`): opening a loader workbook will not fire its `Workbook_Open`. Add `--allow-events` when you *want* that to happen.
+- Exit codes: `0` all passed, `1` failures, `2` refused to run (dangerous code).
+- Events are off by default (`EnableEvents=False`): opening a loader workbook does not fire its `Workbook_Open`. Pass `--allow-events` to allow that.
 - Nothing is written to the workbook unless you pass `--save`.
-- Injected test modules stay behind unless you pass `--cleanup`; the report lists what's left.
-- The bundled template uses Chinese sheet names (`明细数据` / `汇总` / `校验`). Rename freely — the assertions just have to match.
+- Injected test modules stay in the workbook unless you pass `--cleanup`; the report lists any that are left.
+- The bundled template uses Chinese sheet names (`明细数据` / `汇总` / `校验`). Rename them freely; keep the assertions in sync.
 
-### C. Single-purpose tools
+### Run the demo project
 
-```bash
-python tools/vba/dismiss_vba_dialog.py        # clear a stuck VBA error dialog (4 escalating strategies)
-python tools/vba/vba_attr_probe.py            # reproduce the Attribute-line "macros are disabled" false failure
-python tools/vba/bare_name_scope_probe.py     # which macro-name call styles fail on a hidden-window loader
-python tools/vba/hidden_app_props_probe.py    # hidden window: Application.Calculation raises 1004, 9 other settings do not
-python tools/vba/vba_guard.py <excel_pid> 60  # attach the guard to one long-running macro
-```
+`examples/complex-demo/` is a complete six-module project (5,000 rows, budget sheet, SUMIF
+reconciliation, PivotTable, 2 charts, named ranges, a slow-motion entry point, a
+cell-vs-array write benchmark) plus deliberately broken modules: a real `MsgBox`, a hang
+with no dialog, a runaway loop, a 12 s macro that must survive, and the same operation
+written with and without qualification (1004 vs green).
 
-### D. Run the whole toolchain once
-
-`examples/complex-demo/` is a six-module project — 5 000 rows, budget sheet, SUMIF
-reconciliation, PivotTable, 2 charts, named ranges, a slow-motion entry point, an array-vs-cell
-benchmark — plus deliberately broken modules: a real `MsgBox`, a hang with no dialog, a runaway
-loop, a 12 s macro that must survive, and the same operation written unqualified (1004) vs
-qualified (green).
-
-Six stages, each with its expected result. Stage 5 proves the assertions read fresh values:
-it writes `STALE` into a checkpoint cell, re-runs the macro, and expects `PASS` back. Start at
-[`examples/complex-demo/README.md`](examples/complex-demo/README.md).
-
----
+It runs in six stages, each with an expected result. Stage 5 proves that assertions read
+fresh values: it writes `STALE` into a checkpoint cell, re-runs the macro, and expects
+`PASS` back. Start at [`examples/complex-demo/README.md`](examples/complex-demo/README.md).
 
 ## What's inside
 
 | Path | What it does |
 |---|---|
-| `tools/vba/run_vba.py` | The runway: strip `Attribute` lines → block dangerous statements → inject → guard → run → force recalculation → assert → report. Auto-qualifies the macro name when the workbook window is saved hidden; auto-detects source encoding (UTF-8 / GBK / …); writes only with `--save` |
-| `tools/vba/vba_project.py` | Project-level surgery: `list` / `read` modules, line-level `patch` (only the lines you name get rewritten — no more whole-module rewrites that drop shortcut bindings), **real** compile check, `backup`, `import`, `refs`. Same layering as the runway: all COM lives in the child process |
-| `tools/vba/vba_diagnose.py` | Read-only diagnosis when a macro "cannot run": hidden window / broken references / `Attribute` lines / unqualified references. Takes a file or a directory — the directory mode is static and needs no Excel |
-| `tools/vba/vba_lint_refs.py` | Static lint: every unqualified reference (`Sheets(`, `Range(`, `Cells(`, `ActiveSheet`, `ActiveWorkbook`, …) by file and line. Reads GBK/UTF-8 sources, never opens Excel |
-| `tools/vba/vba_guard.py` | Guard: dismiss dialogs (clicks the id **4800** "End" button) / idle-hang verdict / runaway-CPU verdict / heartbeat protection |
-| `tools/vba/dismiss_vba_dialog.py` | One-shot cleanup of stuck dialogs (BM_CLICK → WM_COMMAND → real mouse → kill) |
-| `tools/vba/vba_attr_probe.py` | Attribute-line probe (reproduces the `0x800A03EC` false failure) |
-| `tools/vba/vbe_compile_probe.py` | Probe: two "looks like a compile error" illusions, reproduced on real Excel — on a Chinese VBE the usual programmatic compile command silently does nothing, and a module named like its procedure cannot be `Run` at all. Both print the same "macros may be disabled" sentence |
-| `tools/vba/bare_name_scope_probe.py` | Probe: which macro-name call styles fail on a hidden-window loader (5 cases, self-contained) |
-| `tools/vba/hidden_app_props_probe.py` | Probe: on a hidden-window loader `Application.Calculation` raises 1004 — 9 other common settings are unaffected |
-| `tools/vba/scan_hidden_windows.py` | Static scan for workbooks whose window is hidden *on disk* (reads `xl/workbook.xml`, no Excel needed) |
-| `examples/complex-demo/` | The demo project + fault modules — regression test for every layer (see its README) |
-| `tools/validate.py` | Self-check: script syntax, skill/instruction frontmatter, no personal paths or key prefixes, and no metaphor-heavy wording in model-facing files |
+| `tools/vba/run_vba.py` | The full loop in one command: strip `Attribute` lines, block dangerous statements, inject, guard, run, force recalculation, assert, report. Auto-qualifies the macro name when the workbook window is saved hidden; auto-detects source encoding (UTF-8 / GBK / …); writes only with `--save` |
+| `tools/vba/vba_project.py` | Project-level read/write: `list` and `read` modules, line-level `patch` (only the lines you name are rewritten, so procedure attributes like shortcut-key bindings survive), a real compile check, `backup`, `import`, `refs`. All COM work runs in a child process |
+| `tools/vba/vba_diagnose.py` | Read-only diagnosis for "cannot run the macro": hidden window, broken references, `Attribute` lines, unqualified references. Accepts a file or a directory; the directory mode is static and needs no Excel |
+| `tools/vba/vba_lint_refs.py` | Static lint: lists every unqualified reference (`Sheets(`, `Range(`, `Cells(`, `ActiveSheet`, `ActiveWorkbook`, …) with file and line number. Reads GBK/UTF-8 sources; never opens Excel |
+| `tools/vba/vba_guard.py` | The guard: dismisses dialogs (clicks the id **4800** "End" button), detects idle hangs and runaway CPU, watches a heartbeat file |
+| `tools/vba/dismiss_vba_dialog.py` | One-shot cleanup of stuck dialogs (BM_CLICK → WM_COMMAND → real mouse → kill, escalating) |
+| `tools/vba/vba_attr_probe.py` | Probe that reproduces the `0x800A03EC` false failure caused by an `Attribute` line |
+| `tools/vba/vbe_compile_probe.py` | Probe that reproduces two cases that look like compile errors: on a Chinese VBE, the common programmatic compile command does nothing; and a module whose name equals its procedure cannot be run at all. Excel shows the same "macros may be disabled" message for both |
+| `tools/vba/bare_name_scope_probe.py` | Probe: which of five macro-name call styles fail on a hidden-window loader |
+| `tools/vba/hidden_app_props_probe.py` | Probe: on a hidden-window loader, `Application.Calculation` raises 1004 while 9 other common settings are unaffected |
+| `tools/vba/scan_hidden_windows.py` | Static scan for workbooks whose window is hidden on disk (reads `xl/workbook.xml`; no Excel needed) |
+| `examples/complex-demo/` | The demo project and fault modules; regression test for every layer (see its own README) |
+| `tools/validate.py` | Repo self-check: script syntax, skill and instruction frontmatter, personal paths, key prefixes, and banned wording in model-facing files |
 | `tools/vba/mcp_server.py` | Zero-dependency MCP server, 9 tools: `excel_status` (read-only) / `run_vba` / `dismiss_dialog` / `vba_modules` / `vba_patch_module` / `vba_check_compile` / `vba_backup` / `vba_import_module` / `vba_list_references`. stdio JSON-RPC; output is forced to UTF-8 so Chinese text survives the pipe |
-| `scripts/` | MCP smoke tests: `mcp-smoke.ps1` (initialize + `tools/list`) and `mcp-encoding-probe.py` (reads the server's raw stdout bytes to tell which encoding it emits) |
+| `scripts/` | MCP smoke tests: `mcp-smoke.ps1` (initialize + `tools/list`) and `mcp-encoding-probe.py` (reads the server's raw stdout to show which encoding it emits) |
 | `.github/skills/excel-vba-automation/` | The skill itself: rules, failure matrix, error attribution, dev loop (Chinese version in `references/`) |
 | `.github/skills/…/templates/` | A working multi-dimensional summary template (sheets, formats, PivotTable, chart, reconciliation checks) |
 | `.github/instructions/vba.instructions.md` | Always-on rules for `.bas` / `.vba` / `tools/vba/**` |
-| `.github/prompts/` | `/vba-dev` (EN) and `/vba-dev-zh` (中文): the write → test → fix loop (VS Code + Copilot slash commands) |
-| `.vscode/mcp.json` | (optional, VS Code) registers `run_vba` as a first-class tool over MCP |
+| `.github/prompts/` | `/vba-dev` (English) and `/vba-dev-zh` (中文): the write → test → fix loop as VS Code slash commands |
+| `.vscode/mcp.json` | (optional, VS Code) registers `run_vba` as an MCP tool |
 
----
+## Troubleshooting
 
-## When it goes wrong
+Two unrelated causes produce the same message, *"Cannot run the macro… macros may be
+disabled"*. It is never a Trust Center problem:
 
-Two unrelated problems print the exact same sentence — *"Cannot run the macro… macros may be
-disabled"* — and it is never a Trust Center problem:
-
-1. The code contains an `Attribute` line. That line is VBE metadata, legal only in an exported
-   `.bas`; injected, it breaks the module and the whole project. `run_vba.py` strips it.
-2. The workbook window was **saved hidden** — normal for loader / host workbooks. Excel then has
-   no active workbook, and a bare macro name cannot resolve. `run_vba.py` auto-qualifies;
-   `vba_diagnose.py` tells the two apart.
+1. The code contains an `Attribute` line. That line is VBE metadata; it is only valid in an
+   exported `.bas` file. Injected as source, it breaks the module and the whole project.
+   `run_vba.py` strips it.
+2. The workbook window was **saved hidden**, which is common for loader and host workbooks.
+   Excel then has no active workbook, and a bare macro name cannot resolve. `run_vba.py`
+   auto-qualifies the name; `vba_diagnose.py` tells the two cases apart.
 
 | Symptom | Cause / fix |
 |---|---|
-| Same message as above | See the two causes; it is not your macro security settings |
-| `⛔ 拒绝注入` (injection refused) | `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / `.Show` in the code — all of them block an automated instance. Remove, or pass `--allow-unsafe` |
-| Guard killed Excel mid-run | The workbook was saved before the run — run again, the script reopens it |
-| `UnicodeDecodeError` reading a `.bas` | The source isn't UTF-8 (older Chinese/Japanese/European exports). Encoding is auto-detected; if it still fails, pass `--encoding gbk` (or `cp932` / `cp1252`) |
-| Runtime error **1004** / **91** *during* a run | Unqualified references (`Sheets("X")`, `ActiveSheet`, …) cannot resolve with no active workbook. Run `python tools/vba/vba_lint_refs.py <dir>` and qualify them with `ThisWorkbook.Worksheets(...)` |
-| Broken output after `> out.txt` | Non-ASCII symbols on a non-UTF-8 console. The tools force UTF-8 with `errors="replace"`; add `--ascii` for plain terminals |
+| The message above | See the two causes. It is not your macro security settings |
+| `⛔ 拒绝注入` (injection refused) | `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / `.Show` in the code; all of them block an automated Excel. Remove them, or pass `--allow-unsafe` |
+| Guard killed Excel during a run | The workbook was saved before the run started. Run the command again; the script reopens it |
+| `UnicodeDecodeError` reading a `.bas` | The source is not UTF-8 (older Chinese / Japanese / European exports). Encoding is auto-detected; if it still fails, pass `--encoding gbk` (or `cp932` / `cp1252`) |
+| Runtime error **1004** or **91** during a run | Unqualified references (`Sheets("X")`, `ActiveSheet`, …) cannot resolve with no active workbook. Run `python tools/vba/vba_lint_refs.py <dir>` and qualify them with `ThisWorkbook.Worksheets(...)` |
+| Garbled output after `> out.txt` | Non-ASCII characters on a non-UTF-8 console. The tools force UTF-8 with `errors="replace"`; add `--ascii` for plain terminals |
 | Approving the command every time | VS Code setting `chat.tools.terminal.autoApprove` for `python tools/vba/*` |
-| Skill has no effect | Directory name must equal `SKILL.md`'s `name`; check the skill is enabled; use Chat **Diagnostics** |
-| What CI runs | `tools/validate.py` — skill frontmatter, personal paths, key prefixes. Add private terms via the `VBA_KIT_DENYLIST` env var (comma-separated), never in the repo |
-
----
+| Skill has no effect | The directory name must equal `SKILL.md`'s `name`; check that the skill is enabled; use Chat Diagnostics |
+| What CI runs | `tools/validate.py`: skill frontmatter, personal paths, key prefixes. Add private terms through the `VBA_KIT_DENYLIST` environment variable (comma-separated); never commit them |
 
 ## Limits
 
-- Desktop Excel on Windows only. Excel Online, WPS, LibreOffice and Excel for macOS are not supported — the whole toolchain is COM + window messages.
-- When a macro hangs, the guard kills the Excel process. That is the intended behaviour, and why `run_vba.py` saves the workbook before starting. Work done after the last save is lost.
-- Loader workbooks with a hidden window are left as they are. The tools adapt to the file; they don't "fix" it.
-- Everything below was measured on one machine. Your timings will differ.
+- Windows desktop Excel only. The toolchain is COM and window messages; Excel Online, WPS,
+  LibreOffice and Excel for macOS are not supported.
+- When a macro hangs, the guard kills the Excel process. That is intended, and it is why
+  `run_vba.py` saves the workbook before starting. Work done after the last save is lost.
+- Loader workbooks with a hidden window are left as they are. The tools adapt to the file
+  rather than "fixing" it.
 
-## Measured here
+## Measured on one machine
 
-Windows 11, Microsoft 365 desktop Excel, Python 3.11:
+Windows 11, Microsoft 365 desktop Excel, Python 3.11 (numbers from one machine; yours will
+differ):
 
 - Development loop: 4 rounds (error → fix → all green)
-- Dialog reaction: appears → dismissed in **12–46 ms**; dismissal ≈ 0.2 s including guard cold start
-- Hang detection: `IDLE_HUNG` verdict and kill at 6.5–6.6 s; runaway-CPU killed at 12.7 s; a 16 s long-running macro is **not** killed (heartbeat protection, zero false kills)
-- Hidden-window loader: bare macro name fails → auto-retried qualified, green in **0.027 s**; hidden state is inherited by "Save As" (verified with a control experiment)
-- Demo chain (6 modules, 11 assertions): **2.09 s**; bundled template: **8/8 assertions in 0.47 s**
-- Not tested here: loading Skills / prompt files / MCP inside VS Code, and Excel versions other than Microsoft 365 desktop
-
----
+- Dialog reaction: dismissed 12–46 ms after appearing (about 0.2 s including guard startup)
+- Hang detection: `IDLE_HUNG` verdict and kill at 6.5–6.6 s; runaway CPU killed at 12.7 s; a 16 s macro is not killed (heartbeat protection, no false kills)
+- Hidden-window loader: a bare macro name fails; the auto-retry with a qualified name passes in 0.027 s. The hidden state is inherited by "Save As" (verified with a control experiment)
+- Demo project (6 modules, 11 assertions): 2.09 s; bundled template: 8/8 assertions in 0.47 s
+- Not tested here: loading skills, prompt files or MCP inside VS Code, and Excel versions other than Microsoft 365 desktop
 
 ## Background
 
-I work with Excel files that are large, formula-heavy and old — the kind where a mistake is
-expensive and "just re-run it" isn't obvious. What I wanted from an AI was not macro code, but a
-macro that runs and proves it ran. This devkit is the pipeline that came out of that: a guard, a
-report, and a list of the ways automation fails that no amount of careful prompting fixes.
+I work with Excel workbooks that are large, formula-heavy, and old. What I wanted from an AI
+was not macro code but a macro that runs and proves it ran. This devkit is what came out of
+that work.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT; see [LICENSE](LICENSE).

@@ -23,10 +23,32 @@ python tools/vba/run_vba.py --workbook <x.xlsm> --code <模块名=文件> --run 
 4. **代码里禁止 `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / UserForm `.Show`**。都会使自动化实例**阻塞**（`Stop`/`Debug.Assert` 最难检测：将 VBE 置入断点模式，**无弹窗、纯阻塞**）。`run_vba.py` 注入前静态拦截。
 5. **每个宏都加错误处理**：`On Error GoTo EH`，EH 里把 `Err.Number & ": " & Err.Description` 写进单元格，并追加一行到日志文件（`Open ... For Append`）。这是"没有弹窗时"唯一的错因来源。读日志文件用 `encoding="gbk"`（ANSI 写入）。
 6. **运行前保存**（`run_vba.py` 默认做）。这样守卫判定卡死而杀进程时，只损失一次重开会话，而不是未保存内容全部丢失。
+   - **只关"我们打开的那个"工作簿。** 工作簿本来就是用户开着的（复用实例）时，`Close(SaveChanges=False)` 会把**用户未保存的修改直接丢掉**。复用实例绝不 `Quit`；自建实例必须 `Quit`，而且还要**确认进程真的退出**——`Quit()` 只是"请求退出"（见失败矩阵里「文件正被其他程序使用」那一行）。
 7. **性能**：数据先在数组里算好、**一次性写回区域**；关 `ScreenUpdating`、`Calculation = xlCalculationManual`（结束前恢复）；能靠公式/SUMIF/透视表的不用 VBA 循环。
    - 实测：单次单元格写入 **64 µs**、文件追加 **359 µs**。**逐格循环是宏变慢的首要原因**（10 万次 ≈ 6.4 秒；真实工作簿里 4 万格逐格写 = **2058 ms**），而 VBA 纯计算 300 万次只要 49 ms。同样 4 万格改成数组一次性写回 = **42.7 ms → 48× 提速**，且校验和与闭式解完全一致（属于真实提速，而非减少工作量）。
    - 进度/步骤标记只放在**阶段边界**（≤10 处），**不放入循环体**。
 8. **宏跑完不等于跑对**：必须写断言回读关键单元格/表/透视表/命名区域。断言数字按数值比较；公式值要在**强制重算后**读取（`run_vba.py` 已处理）。
+
+## 工程级读写（`vba_project.py`）
+
+读/改模块、编译检查、备份、看引用走 `tools/vba/vba_project.py`（同时由 `tools/vba/mcp_server.py` 暴露为 MCP 工具：`vba_modules` / `vba_patch_module` / `vba_check_compile` / `vba_backup` / `vba_import_module` / `vba_list_references`）。分层与跑道一致：MCP server 只拼命令行，COM 全在子进程里。
+
+```bash
+python tools/vba/vba_project.py list    --workbook x.xlsm
+python tools/vba/vba_project.py read    --workbook x.xlsm --module M [--all]
+python tools/vba/vba_project.py patch   --workbook x.xlsm --module M --op replace --start 12 --end 14 --code-file fix.txt --save
+python tools/vba/vba_project.py compile --workbook x.xlsm
+python tools/vba/vba_project.py backup  --workbook x.xlsm [--module M] [--out-dir D]
+python tools/vba/vba_project.py import  --workbook x.xlsm --source M.bas [--module M] --save
+python tools/vba/vba_project.py refs    --workbook x.xlsm
+```
+
+- **按行改，绝不整模块重写。** `patch` 用 `DeleteLines`/`InsertLines`；`Attribute` 行只存在于导出的 `.bas` 里、**不在 `CodeModule` 里**，所以行级编辑不可能碰到它们。注入的代码若**含** `Attribute` 行会被自动剥离（铁律 1）。**整体替换只走 `import`** —— `VBComponents.Import` 会解析并保留 `Attribute` 行（含 `VB_ProcData` 快捷键绑定）。
+- **编译检查是真编译。** 注入一个空探针宏并 Run 它；VBA 在任何 `Run` 之前必须**工程级**编译通过，所以"探针跑通"就等于"整个工程可编译"。探针随后立即移除，不加 `--save` 不落盘。
+  - ⚠️ 网上通行的 `VBE.CommandBars.FindControl(Id:=578).Execute()` **在本机彻底无效**：中文 VBE 上该调用拿回来的是**"文件"菜单**（`Id=30002`），扫遍菜单也没有任何编译项，`Execute()` 0.02 秒返回、什么都不做，而"检查"却报通过 —— 比不检查更坏。复现：`python tools/vba/vbe_compile_probe.py` 的 [1]。
+  - ⚠️ 工程编译不过时 Excel 抛的是**「无法运行宏」**，与宏名解析失败**一字不差**。另外**过程名不能与模块名相同**：模块 `M` 里的 `Sub M()` 用 `M`、`book.xlsm!M`、`'book.xlsm'!M` 三种写法**全都跑不起来**。所以探针的模块名与过程名是刻意分开的。复现：同上探针的 [3]。
+- 写操作默认**先自动备份**（`VBA_Backup/<时间戳>_before-*`），且不加 `--save` 绝不写盘。
+- 导出/导入文件按**系统 ANSI 代码页**（本机 cp936）读写；写成 UTF-8 会让中文注释全部损坏。CLI 读取时会自动识别编码。
 
 ## 失败判定矩阵（`vba_guard.py`）
 
@@ -40,8 +62,11 @@ python tools/vba/run_vba.py --workbook <x.xlsm> --code <模块名=文件> --run 
 | 死循环跑飞 | 消息泵无响应 + CPU 持续 >0.3s/2s | 超硬预算杀 | 20.8 s 判 `RUNAWAY_CPU` |
 | 长任务在推进 | 心跳文件新鲜 | **不杀**，继续等 | 16 s 宏零误杀 |
 | 慢但泵消息 | 活性探测有响应 | 不杀 | — |
+| `Microsoft Excel 不能访问文件…文件正被其他程序使用`，且**之后每次调用都这样失败** | 上一次调用留下的 Excel 实例从没退出。`Quit()` 只是"请求退出"：注入过模块 / 触发过 VBE 编译的实例会变成**无窗口僵尸进程**，仍然占着工作簿 | 自建实例在 `Quit()` 后必须**确认真的退出**，超时则 kill（`run_vba.py` / `vba_project.py` 里的 `ensure_excel_exit`）。只碰自建实例；打开侧也加了退避重试，因为正常退出也要一会儿 | 实测：僵尸 = 无窗口 + 占住文件 → 6 次退避重试（≈12 s）**全部失败**；修好后 18/18 自检跑完**零**个残留 Excel 进程 |
 
 弹窗里读错因：`Static` 控件 **id 4803** 就是错误原文（如 `运行时错误 '9': 下标越界`）。按钮控件 ID：**4800=结束、4801=调试、4802=继续（通常灰）、4902=帮助**。
+
+**验证"杀没杀掉"**：`TerminateProcess` 是**异步**的 —— 守卫刚打出 `KILLED` 时进程还在退出路上，立刻检查会读成"还活着"。`run_vba.py` 会等 pid 真正消失再报 `excel_alive`，所以不再出现 `KILLED` 与 `excel_alive: true` 并存的误导组合（以前那看起来像"守卫没杀掉"）。
 
 ## 错误归因顺序
 
@@ -63,5 +88,5 @@ python tools/vba/run_vba.py --workbook <x.xlsm> --code <模块名=文件> --run 
 ## 参考
 
 - `templates/vba_summary_report.bas.txt` — 通用多维汇总模板（宏名 `BuildSummaryReport`）：3 张表 / 造数 / 格式 + 3 色阶条件格式 / 自动筛选 / 冻结窗格 / SUMIF / 透视表 / 柱状图 / 对账校验 / 命名区域（实测 0.47 s，8/8 断言通过）
-- 脚本在本 kit 的 `tools/vba/`：`run_vba.py`（开发测试跑道：隐藏窗口装载器自动补限定名、源码编码自动识别、仅 `--save` 时写盘、`--cleanup` 移除注入模块）、`vba_guard.py`（弹窗 / 卡死守卫）、`vba_diagnose.py`（只读诊断）、`vba_lint_refs.py`（未限定引用静态扫描）、`scan_hidden_windows.py`（隐藏窗口静态巡检）、`bare_name_scope_probe.py`（宏名解析边界探针）、`hidden_app_props_probe.py`（隐藏窗口 Application 设置探针）、`dismiss_vba_dialog.py`、`vba_attr_probe.py`
+- 脚本在本 kit 的 `tools/vba/`：`run_vba.py`（开发测试跑道：隐藏窗口装载器自动补限定名、源码编码自动识别、仅 `--save` 时写盘、`--cleanup` 移除注入模块）、`vba_project.py`（工程级读写：列/读模块、行级 `patch`、**真**编译检查、`backup`、`import`、`refs` —— 见上一节）、`mcp_server.py`（把这些能力暴露成 9 个 MCP 工具，stdio JSON-RPC、零依赖）、`vba_guard.py`（弹窗 / 卡死守卫）、`vba_diagnose.py`（只读诊断）、`vba_lint_refs.py`（未限定引用静态扫描）、`scan_hidden_windows.py`（隐藏窗口静态巡检）、`bare_name_scope_probe.py`（宏名解析边界探针）、`hidden_app_props_probe.py`（隐藏窗口 Application 设置探针）、`dismiss_vba_dialog.py`、`vba_attr_probe.py`
 - 路径一律用 `/`，保持跨平台可移植

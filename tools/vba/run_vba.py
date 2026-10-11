@@ -180,15 +180,38 @@ def get_active_excel():
         return None
 
 
+def _wb_tail(path_or_url):
+    """本地路径或 OneDrive URL → 可比较的尾部分段（父目录/文件名）。"""
+    s = str(path_or_url).replace("\\", "/")
+    if "://" in s:
+        import urllib.parse
+        s = urllib.parse.unquote(s.split("://", 1)[1])
+    parts = [p for p in s.split("/") if p]
+    return "/".join(parts[-2:]).lower()
+
+
 def find_open_workbook(xl, path):
+    """找已经打开的目标工作簿。
+
+    ⚠ OneDrive/SharePoint 上的工作簿 `wb.FullName` 是 **https URL**，与本地路径
+    （C:/Users/…/OneDrive - X/桌面/x.xlsm）前缀完全不同 —— 用 abspath 比较**永远不相等**，
+    会把同一个文件再打开一次（可能触发"保存冲突副本"）。URL 情况退化为比较
+    "父目录/文件名"尾部分段（并要求本地文件存在）。
+    """
     try:
         n = xl.Workbooks.Count
     except Exception:
         return None
+    target_full = os.path.normcase(os.path.abspath(path))
     for i in range(1, n + 1):
         try:
             wb = xl.Workbooks.Item(i)
-            if os.path.normcase(os.path.abspath(str(wb.FullName))) == os.path.normcase(os.path.abspath(path)):
+            full = str(wb.FullName)
+            if full.startswith(("http://", "https://")):
+                if os.path.exists(path) and _wb_tail(full) == _wb_tail(path):
+                    return wb
+                continue
+            if os.path.normcase(os.path.abspath(full)) == target_full:
                 return wb
         except Exception:
             pass
@@ -204,6 +227,59 @@ def inject(vbp, mod, code):
     c.Name = mod
     c.CodeModule.AddFromString(code)
     return c
+
+
+def _in_use(exc):
+    s = str(exc)
+    return any(k in s for k in ("其他程序使用", "正被其他程序", "不能访问文件",
+                                "被占用", "in use", "being used",
+                                "Cannot access the file", "already open"))
+
+
+def open_with_retry(xl, path, attempts=6):
+    """打开工作簿；撞上"文件正被其他程序使用"就退避重试。
+
+    为什么必须重试（实测）：上一次调用新建的 Excel 实例 `Quit()` 是**异步**的，要 1~3 秒才
+    真正退出并释放文件锁。而开发循环里「跑一轮 → 改代码 → 再跑一轮」间隔常只有几百毫秒，
+    于是下一轮会在文件被占用的瞬间失败，报出一条与代码毫无关系的错误。
+    """
+    last = None
+    for i in range(attempts):
+        try:
+            return xl.Workbooks.Open(path)
+        except Exception as e:
+            if not _in_use(e):
+                raise
+            last = e
+            time.sleep(0.6 + 0.6 * i)
+    raise last
+
+
+def ensure_excel_exit(pid, timeout=4.0):
+    """确认**本进程创建**的 Excel 真的退出；到点还在就 kill。
+
+    为什么必须做（实测）：`Quit()` 只是"请求退出"。注入过 VBA 模块、触发过 VBE 编译的实例，
+    实测会留下**无窗口的僵尸进程** —— 进程还在、仍持有目标工作簿，于是后续每次调用都报
+    「Microsoft Excel 不能访问文件…文件正被其他程序使用」，而且退避重试十几秒也过不去。
+    这个实例是本进程创建的，kill 它绝不碰用户自己开的 Excel。
+    返回 "exited" / "killed" / "kill_failed" / None（无法检测）。
+    """
+    if not pid:
+        return None
+    try:
+        import psutil
+    except ImportError:
+        return None
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if not psutil.pid_exists(pid):
+            return "exited"
+        time.sleep(0.25)
+    try:
+        psutil.Process(pid).kill()
+        return "killed"
+    except Exception:
+        return "kill_failed"
 
 
 def resolve_run_name(xl, wb, name):
@@ -291,7 +367,8 @@ def main():
     wb_path = os.path.abspath(args.workbook)
     report = {"workbook": wb_path, "macro": args.run, "verdict": None, "run_return": None,
               "elapsed_s": None, "error": None, "guard": [], "assertions": [], "code_scan": [],
-              "reused_instance": False, "saved": False, "excel_alive": None,
+              "reused_instance": False, "reused_app": False, "visible_untouched": False,
+              "saved": False, "excel_alive": None, "excel_pid": None,
               "run_name": None, "run_name_qualified": None, "run_retried_qualified": False,
               "presaved": False, "cleaned_modules": None, "left_modules": None}
     problems = []
@@ -343,21 +420,38 @@ def main():
 
     # ---- 2) 拿 Excel 实例（复用优先）----
     xl = get_active_excel()
+    created_excel = xl is None                    # 只有自己新建的实例才允许 Quit
     wb = None
     if xl is not None:
         wb = find_open_workbook(xl, wb_path)
         report["reused_instance"] = wb is not None
-    if xl is None:
+    if created_excel:
         xl = w32.DispatchEx("Excel.Application")
+    report["reused_app"] = not created_excel
+
+    # 复用用户正开着的实例时，**必须**把动过的全局开关原样放回去 —— 否则就是破坏用户会话：
+    #   * xl.Visible=False 会把用户的 Excel 窗口直接藏掉（进程还在，用户以为程序被关了）
+    #   * AutomationSecurity=1 把宏安全级别降到最低留在用户会话里
+    #   * 更早的版本还按"目标工作簿是否已打开"来判断要不要 Quit() —— 那会在用户开着别的
+    #     工作簿时把整个 Excel 退掉，未保存内容一起丢（实测发现：用户正编辑 Z:\...\x.xlsx）
     prev_enable_events = None
+    prev_display_alerts = None
+    prev_automation_security = None
+    prev_visible = None
     try:
         prev_enable_events = bool(xl.EnableEvents)
+        prev_display_alerts = bool(xl.DisplayAlerts)
+        prev_automation_security = int(xl.AutomationSecurity)
+        prev_visible = bool(xl.Visible)
     except Exception:
         pass
     try:
         xl.DisplayAlerts = False
         xl.AutomationSecurity = 1
-        xl.Visible = bool(args.visible)
+        if created_excel:
+            xl.Visible = bool(args.visible)       # 自己建的实例：默认隐藏（快）
+        else:
+            report["visible_untouched"] = True    # 复用实例：绝不动用户窗口的可见性
         if not args.allow_events:
             # 装载器/宿主工作簿"一打开就跑程序"：测试工具绝不能顺带把它跑起来
             xl.EnableEvents = False
@@ -366,13 +460,18 @@ def main():
         pass
     if wb is None:
         if os.path.exists(wb_path):
-            wb = xl.Workbooks.Open(wb_path)
+            wb = open_with_retry(xl, wb_path)
         else:
             wb = xl.Workbooks.Add()
             wb.SaveAs(wb_path, FileFormat=52)
     xl_pid = win32process.GetWindowThreadProcessId(xl.Hwnd)[1]
-    log("Excel: %s | pid=%s | 工作簿=%s" % ("复用已开实例" if report["reused_instance"] else "新建实例",
-                                           xl_pid, wb.Name))
+    report["excel_pid"] = xl_pid
+    # 区分"实例"与"工作簿"两件事：复用了用户的实例 ≠ 目标工作簿本来就开着。
+    # 原来只看 reused_instance，会把"复用用户实例"误报成"新建实例"，让人误以为动不了用户会话。
+    log("Excel: %s | pid=%s | 工作簿=%s（%s）" % (
+        "复用用户已开的实例" if report["reused_app"] else "本进程新建的实例",
+        xl_pid, wb.Name,
+        "该工作簿此前已打开" if report["reused_instance"] else "本次打开"))
 
     # ---- 2.5) 先保存"用户数据"，再注入 ----
     # 顺序很关键：保存放在注入之前，测试模块就不会被动写进磁盘。
@@ -480,6 +579,17 @@ def main():
     else:
         report["verdict"] = "ok"
     report["error"] = errtext or (str(run_exc)[:300] if run_exc else None)
+    if killed:
+        # 守卫刚下发 kill，而 TerminateProcess 是**异步**的：进程还要几百毫秒才真正消失。
+        # 立刻检查会得到"Excel 还活着"的假象 —— 报告里 `KILLED` 和 `excel_alive=true` 并存
+        # 非常误导（看起来像守卫没杀掉）。这里等它真正消失再判。
+        for _ in range(20):
+            try:
+                if not psutil.pid_exists(xl_pid):
+                    break
+            except Exception:
+                break
+            time.sleep(0.2)
     try:
         report["excel_alive"] = any(p.pid == xl_pid for p in psutil.process_iter(["pid"]))
     except Exception:
@@ -557,11 +667,18 @@ def main():
                 fails.append(spec)
 
     # ---- 9) 清理 / 保存 / 收尾 ----
-    if prev_enable_events is not None:
-        try:
-            xl.EnableEvents = prev_enable_events      # 复用实例时把事件开关还原，别留在用户会话里
-        except Exception:
-            pass
+    # 复用用户实例时，把动过的全局开关全部还原（新建的实例马上要 Quit，不必还原）
+    if not created_excel:
+        for attr, val in (("EnableEvents", prev_enable_events),
+                          ("DisplayAlerts", prev_display_alerts),
+                          ("AutomationSecurity", prev_automation_security),
+                          ("Visible", prev_visible)):
+            if val is None:
+                continue
+            try:
+                setattr(xl, attr, val)
+            except Exception:
+                pass
     injected = list(modules.keys())
     if args.cleanup and report["excel_alive"]:
         removed = []
@@ -585,13 +702,21 @@ def main():
             report["saved"] = True
         except Exception as e:
             log("⚠ 收尾保存失败: %r" % (e,))
-    if not killed and not args.keep_open and report["excel_alive"] and not report["reused_instance"]:
+    if not killed and not args.keep_open and report["excel_alive"]:
         try:
-            try:
-                wb.Close(bool(args.save))     # 说好不存就不存（原来是无条件 Close(True)，会静默写入测试模块）
-            except Exception:
-                pass
-            xl.Quit()
+            # 只关"我们打开的工作簿"：若工作簿本来就是用户开着的（复用实例），绝不能关 ——
+            # Close(SaveChanges=False) 会把用户**未保存的修改直接丢掉**。
+            if not report["reused_instance"]:
+                try:
+                    wb.Close(bool(args.save))  # 说好不存就不存（原来是无条件 Close(True)，会静默写入测试模块）
+                except Exception:
+                    pass
+            if created_excel:
+                xl.Quit()                      # 只关自己建出来的实例；复用用户实例时绝不 Quit
+                report["excel_exit"] = ensure_excel_exit(xl_pid)
+                if report["excel_exit"] == "killed":
+                    log("ℹ 自建的 Excel 实例 Quit 后未自行退出，已强杀"
+                        "（否则它会占住工作簿，让后续调用报『文件正被其他程序使用』）")
         except Exception:
             pass
 

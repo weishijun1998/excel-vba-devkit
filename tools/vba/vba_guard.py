@@ -35,6 +35,20 @@ SMTO_BLOCK, SMTO_ABORTIFHUNG = 0x0001, 0x0002
 SMTO_FLAGS = SMTO_BLOCK | SMTO_ABORTIFHUNG
 
 
+def _setup_stdio():
+    """强制 stdout/stderr 为 UTF-8。
+
+    调用方（run_vba.py）以 encoding="utf-8" 读本进程输出；Windows 上 Python 默认用
+    locale 编码（cp936）写，双方不一致 → 带中文的 DIALOG / ERRTEXT 行（弹窗错因原文，
+    报告的关键信息）会变成乱码。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def parse_args(argv):
     pos = [a for a in argv[1:] if not a.startswith("--") and "=" not in a]
     opts = {}
@@ -208,4 +222,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _setup_stdio()
     sys.exit(main())

@@ -122,17 +122,20 @@ it writes `STALE` into a checkpoint cell, re-runs the macro, and expects `PASS` 
 | Path | What it does |
 |---|---|
 | `tools/vba/run_vba.py` | The runway: strip `Attribute` lines → block dangerous statements → inject → guard → run → force recalculation → assert → report. Auto-qualifies the macro name when the workbook window is saved hidden; auto-detects source encoding (UTF-8 / GBK / …); writes only with `--save` |
+| `tools/vba/vba_project.py` | Project-level surgery: `list` / `read` modules, line-level `patch` (only the lines you name get rewritten — no more whole-module rewrites that drop shortcut bindings), **real** compile check, `backup`, `import`, `refs`. Same layering as the runway: all COM lives in the child process |
 | `tools/vba/vba_diagnose.py` | Read-only diagnosis when a macro "cannot run": hidden window / broken references / `Attribute` lines / unqualified references. Takes a file or a directory — the directory mode is static and needs no Excel |
 | `tools/vba/vba_lint_refs.py` | Static lint: every unqualified reference (`Sheets(`, `Range(`, `Cells(`, `ActiveSheet`, `ActiveWorkbook`, …) by file and line. Reads GBK/UTF-8 sources, never opens Excel |
 | `tools/vba/vba_guard.py` | Guard: dismiss dialogs (clicks the id **4800** "End" button) / idle-hang verdict / runaway-CPU verdict / heartbeat protection |
 | `tools/vba/dismiss_vba_dialog.py` | One-shot cleanup of stuck dialogs (BM_CLICK → WM_COMMAND → real mouse → kill) |
 | `tools/vba/vba_attr_probe.py` | Attribute-line probe (reproduces the `0x800A03EC` false failure) |
+| `tools/vba/vbe_compile_probe.py` | Probe: two "looks like a compile error" illusions, reproduced on real Excel — on a Chinese VBE the usual programmatic compile command silently does nothing, and a module named like its procedure cannot be `Run` at all. Both print the same "macros may be disabled" sentence |
 | `tools/vba/bare_name_scope_probe.py` | Probe: which macro-name call styles fail on a hidden-window loader (5 cases, self-contained) |
 | `tools/vba/hidden_app_props_probe.py` | Probe: on a hidden-window loader `Application.Calculation` raises 1004 — 9 other common settings are unaffected |
 | `tools/vba/scan_hidden_windows.py` | Static scan for workbooks whose window is hidden *on disk* (reads `xl/workbook.xml`, no Excel needed) |
 | `examples/complex-demo/` | The demo project + fault modules — regression test for every layer (see its README) |
 | `tools/validate.py` | Self-check: script syntax, skill/instruction frontmatter, no personal paths or key prefixes, and no metaphor-heavy wording in model-facing files |
-| `tools/vba/mcp_server.py` | Zero-dependency MCP server: `excel_status` (read-only) / `run_vba` / `dismiss_dialog` |
+| `tools/vba/mcp_server.py` | Zero-dependency MCP server, 9 tools: `excel_status` (read-only) / `run_vba` / `dismiss_dialog` / `vba_modules` / `vba_patch_module` / `vba_check_compile` / `vba_backup` / `vba_import_module` / `vba_list_references`. stdio JSON-RPC; output is forced to UTF-8 so Chinese text survives the pipe |
+| `scripts/` | MCP smoke tests: `mcp-smoke.ps1` (initialize + `tools/list`) and `mcp-encoding-probe.py` (reads the server's raw stdout bytes to tell which encoding it emits) |
 | `.github/skills/excel-vba-automation/` | The skill itself: rules, failure matrix, error attribution, dev loop (Chinese version in `references/`) |
 | `.github/skills/…/templates/` | A working multi-dimensional summary template (sheets, formats, PivotTable, chart, reconciliation checks) |
 | `.github/instructions/vba.instructions.md` | Always-on rules for `.bas` / `.vba` / `tools/vba/**` |

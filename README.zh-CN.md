@@ -117,17 +117,20 @@ python tools/vba/vba_guard.py <excel_pid> 60  # 把守卫挂到一个已运行�
 | 路径 | 作用 |
 |---|---|
 | `tools/vba/run_vba.py` | 主流程，一条命令跑完整个循环：剥 `Attribute` 行 → 拦截危险语句 → 注入 → 守卫 → 运行 → 强制重算 → 断言 → 报告。窗口隐藏的工作簿会**自动改用限定宏名**；源码编码自动识别（UTF-8 / GBK …）；不加 `--save` 不写盘 |
+| `tools/vba/vba_project.py` | 工程级读写：`list` / `read` 模块、按行 `patch`（只重写你指定的那几行，不再整模块重写丢快捷键绑定）、**真**编译检查、`backup`、`import`、`refs`。分层与主流程一致：所有 COM 都在子进程里 |
 | `tools/vba/vba_diagnose.py` | 只读诊断（宏"跑不起来"时先跑它）：窗口隐藏 / 坏引用 / `Attribute` 行 / 未限定引用。传文件或目录都行，目录模式是纯静态检查，不用开 Excel |
 | `tools/vba/vba_lint_refs.py` | 静态体检：逐行列出未限定引用（`Sheets(`、`Range(`、`Cells(`、`ActiveSheet`、`ActiveWorkbook`…）。能读 GBK/UTF-8 源码，不开 Excel |
 | `tools/vba/vba_guard.py` | 守卫：点掉弹窗（点 id **4800** 的"结束"按钮）/ 假死判定 / 跑飞判定 / 心跳保护 |
 | `tools/vba/dismiss_vba_dialog.py` | 一次性清掉卡住的弹窗（BM_CLICK → WM_COMMAND → 真实鼠标 → 杀进程） |
 | `tools/vba/vba_attr_probe.py` | Attribute 行探针（复现 `0x800A03EC` 假故障） |
+| `tools/vba/vbe_compile_probe.py` | 探针：两种"看起来像编译错误"的假象，用真实 Excel 复现 —— 中文 VBE 上通行的程序化编译写法其实什么都没做；模块名与过程名相同时宏三种写法全跑不起来。两者报的还是同一句「宏可能已被禁用」 |
 | `tools/vba/bare_name_scope_probe.py` | 探针：五种宏名调用方式里，哪些在隐藏窗口装载器上失败（自带临时文件，不碰用户文件） |
 | `tools/vba/hidden_app_props_probe.py` | 探针：窗口隐藏时 `Application.Calculation` 报 1004，其余 9 项常用设置正常 |
 | `tools/vba/scan_hidden_windows.py` | 静态巡检：不打开 Excel，就能看出哪些工作簿的窗口在磁盘上就是隐藏的（读 `xl/workbook.xml`） |
 | `examples/complex-demo/` | 完整六模块演示工程加故障模块，用来回归整条工具链（见其 README） |
 | `tools/validate.py` | 自检：脚本语法、技能/指令 frontmatter、个人路径与密钥前缀，以及模型可读文件里不得出现比喻/口语 |
-| `tools/vba/mcp_server.py` | 零依赖 MCP server：`excel_status`（只读）/ `run_vba` / `dismiss_dialog` |
+| `tools/vba/mcp_server.py` | 零依赖 MCP server，9 个工具：`excel_status`（只读）/ `run_vba` / `dismiss_dialog` / `vba_modules` / `vba_patch_module` / `vba_check_compile` / `vba_backup` / `vba_import_module` / `vba_list_references`。stdio JSON-RPC；输出强制 UTF-8，中文过管道不乱码 |
+| `scripts/` | MCP 冒烟测试：`mcp-smoke.ps1`（initialize + `tools/list`）与 `mcp-encoding-probe.py`（直接读 server 的 stdout 原始字节，判断它到底输出什么编码） |
 | `.github/skills/excel-vba-automation/` | 技能本体：铁律、失败矩阵、错误归因、开发循环（中文完整版在 `references/`） |
 | `.github/skills/…/templates/` | 可用模板：多维汇总（建表 / 格式 / 透视表 / 图表 / 对账校验） |
 | `.github/instructions/vba.instructions.md` | 按文件类型生效的常驻规则（`applyTo` 指向 `.bas` / `.vba` / `tools/vba/**`） |

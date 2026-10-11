@@ -8,6 +8,8 @@ allowed-tools: shell
 
 Always run macros through **`tools/vba/run_vba.py`**. Never hand-roll win32com injection — that recreates every failure mode listed below.
 
+`tools/` below is relative to the folder holding **this `SKILL.md`** (installed globally, it is *not* the current working directory). Resolve the real path first — usually `<this skill folder>/tools/vba/` — and call the scripts with that path (quote it; it contains no spaces only by luck).
+
 ```bash
 python tools/vba/run_vba.py --workbook <x.xlsm> --code <ModuleName=file> --run <MacroName> \
   --expect "cell:Sheet!A1=value" [--expect ...] [--save] [--keep-open] [--visible] [--allow-events] \
@@ -27,10 +29,32 @@ Source files are **decoded automatically** (BOM → UTF-8 → system ANSI code p
 4. **Never emit `MsgBox` / `InputBox` / `Stop` / `Debug.Assert` / UserForm `.Show`.** Each one hangs an automated instance (`Stop` / `Debug.Assert` are the hardest to detect: they drop the VBE into break mode → **no dialog, pure hang**). `run_vba.py` blocks them before injection.
 5. **Give every macro an error trap**: `On Error GoTo EH`, and in `EH` write `Err.Number & ": " & Err.Description` into a cell **and** append a line to a log file (`Open ... For Append`). That record is the only error source available when no dialog ever appears. Read those files with `encoding="gbk"` (VBA writes ANSI).
 6. **Save before running** — `run_vba.py` does this by default. When the guard decides a macro is hung and kills Excel, you then lose one session instead of unsaved work.
+   - **And close only the workbook *we* opened.** Closing a workbook that was already open in the user's Excel (reused instance) with `SaveChanges=False` **discards the user's unsaved edits**. Reused instances are never `Quit`ed; self-created ones are — and those must be *confirmed* gone, because `Quit()` is only a request (see the failure-matrix row on “file is in use”).
 7. **Performance**: compute inside arrays and **write the range in one shot**; disable `ScreenUpdating`; set `Calculation = xlCalculationManual` (restore afterwards) — **but guard that switch**, a hidden-window loader makes it fail (rule 3); prefer formulas / SUMIF / PivotTables over VBA loops.
    - Measured: one cell write = **64 µs**, one file append = **359 µs**. **Cell-by-cell loops are the primary cause of slow macros** (100 k writes ≈ 6.4 s, 40 k writes ≈ 2058 ms in a real workbook), while pure VBA arithmetic does 3 M iterations in 49 ms. Writing 40 k cells as one array = **42.7 ms → 48× faster**, with the checksum matching the closed-form result (so it is a real speed-up, not less work).
    - Put progress / step markers only at **phase boundaries** (≤10), **never inside a loop**.
 8. **A macro that finished is not a macro that is correct.** Assert on key cells / sheets / PivotTables / named ranges. Numbers compare numerically; formula results must be read **after a forced recalculation** (`run_vba.py` handles that).
+
+## Project-level read/write (`vba_project.py`)
+
+Reading/writing modules, compile-checking, backing up and listing references go through `tools/vba/vba_project.py` — also exposed as MCP tools by `tools/vba/mcp_server.py` (`vba_modules` / `vba_patch_module` / `vba_check_compile` / `vba_backup` / `vba_import_module` / `vba_list_references`). Same layering as the runway: the MCP server only builds a command line, all COM lives in the child process.
+
+```bash
+python tools/vba/vba_project.py list    --workbook x.xlsm
+python tools/vba/vba_project.py read    --workbook x.xlsm --module M [--all]
+python tools/vba/vba_project.py patch   --workbook x.xlsm --module M --op replace --start 12 --end 14 --code-file fix.txt --save
+python tools/vba/vba_project.py compile --workbook x.xlsm
+python tools/vba/vba_project.py backup  --workbook x.xlsm [--module M] [--out-dir D]
+python tools/vba/vba_project.py import  --workbook x.xlsm --source M.bas [--module M] --save
+python tools/vba/vba_project.py refs    --workbook x.xlsm
+```
+
+- **Edit line-wise, never rewrite a whole module.** `patch` uses `DeleteLines`/`InsertLines`; `Attribute` lines exist only in exported `.bas` files, never in `CodeModule`, so line edits cannot drop them. Injected code that *contains* `Attribute` lines is auto-stripped (rule 1). **Whole-module replacement goes through `import` only** — `VBComponents.Import` parses and keeps `Attribute` lines including `VB_ProcData` shortcut bindings.
+- **The compile check really compiles.** It injects an empty probe macro and runs it; VBA compiles **project-wide** before any `Run`, so "probe ran" == "the whole project compiles". The probe is removed immediately and never saved without `--save`.
+  - ⚠️ `VBE.CommandBars.FindControl(Id:=578).Execute()` — the widely posted recipe — is **dead here**: on this Chinese VBE the call returns the *File* menu (`Id=30002`), no compile control exists anywhere in the menus, and `Execute()` returns in 0.02 s doing nothing while the check reports success. That is worse than not checking at all. Reproduce: `python tools/vba/vbe_compile_probe.py` (step [1]).
+  - ⚠️ When the project does not compile, Excel raises `「无法运行宏」` — the **same text** a name-resolution failure produces. And **a procedure may not share its module's name**: `Sub M()` inside module `M` fails to `Run` in every spelling (`M`, `book.xlsm!M`, `'book.xlsm'!M`). Hence the probe module and probe procedure are deliberately named differently. Reproduce: same probe, step [3].
+- Writes are backed up first (`VBA_Backup/<stamp>_before-*`) and nothing reaches disk without `--save`.
+- Export/import files use the **system ANSI code page** (cp936 here); writing them as UTF-8 destroys every Chinese comment. The CLI auto-detects encoding when reading.
 
 ## Failure matrix (`vba_guard.py`)
 
@@ -44,8 +68,11 @@ Source files are **decoded automatically** (BOM → UTF-8 → system ANSI code p
 | Runaway loop | unresponsive + CPU > 0.3 s per 2 s | kill after the hard budget | `RUNAWAY_CPU` at **20.8 s** |
 | Long job making progress | heartbeat file is fresh | **do not kill**, keep waiting | 16 s macro, **zero false kills** |
 | Slow but pumping messages | liveness probe responds | do not kill | — |
+| `Microsoft Excel cannot access the file … 文件正被其他程序使用` and **every** later call fails the same way | an Excel instance left over from the previous call never exited. `Quit()` is only a *request*: instances that had a module injected / triggered a VBE compile **become a windowless zombie** that still holds the workbook | each self-created instance must be **confirmed** gone after `Quit()` and killed past a timeout (`ensure_excel_exit` in `run_vba.py` / `vba_project.py`). Only ever touch self-created instances. Opening also retries with backoff, since a normal exit also takes a moment | measured: zombie = no window + file held → 6 backoff retries (~12 s) **all** failed; after the fix a 18/18 self-test run leaves **zero** Excel processes |
 
 Reading the cause out of a dialog: the `Static` control **id 4803** holds the message (e.g. `Runtime error '9': Subscript out of range`). Button ids: **4800 = End, 4801 = Debug, 4802 = Continue (usually greyed out), 4902 = Help**.
+
+**Verifying a kill**: `TerminateProcess` is **asynchronous** — right after the guard prints `KILLED` the process is still on its way out, so an immediate process check reads "still alive". `run_vba.py` now waits for the pid to actually disappear before reporting `excel_alive`, so `KILLED` no longer coexists with `excel_alive: true` (that combination used to look like "the guard failed to kill").
 
 ## Error attribution order
 
@@ -67,6 +94,6 @@ Reading the cause out of a dialog: the `Static` control **id 4803** holds the me
 ## Reference
 
 - `templates/vba_summary_report.bas.txt` — multi-dimensional summary template (macro `BuildSummaryReport`): 3 sheets / generated data / formatting + 3-colour scale / autofilter / freeze panes / SUMIF / PivotTable / column chart / reconciliation checks / named range (**0.47 s**, 8/8 assertions green)
-- Scripts live in this kit's `tools/vba/`: `run_vba.py` (dev-test runway: auto-qualifies macro names for hidden-window loaders, auto-detects source encoding, writes only with `--save`, `--cleanup` for production files), `vba_guard.py` (dialog / hang guard), `vba_diagnose.py` (read-only diagnosis: hidden window / references / `Attribute` lines / unqualified references; also scans a directory statically, no Excel needed), `vba_lint_refs.py` (static lint: every unqualified reference with file + line, reads GBK/UTF-8 sources), `bare_name_scope_probe.py` (reproduces which call styles fail on a hidden-window workbook), `scan_hidden_windows.py` (static scan of a folder/file for workbooks whose window is hidden on disk — reads `xl/workbook.xml`, no Excel needed), `dismiss_vba_dialog.py`, `vba_attr_probe.py`
+- Scripts live in this kit's `tools/vba/`: `run_vba.py` (dev-test runway: auto-qualifies macro names for hidden-window loaders, auto-detects source encoding, writes only with `--save`, `--cleanup` for production files), `vba_project.py` (project-level read/write: list/read modules, line-level `patch`, **real** compile check, `backup`, `import`, `refs` — see the section above), `mcp_server.py` (MCP server exposing the 9 tools; stdio JSON-RPC, zero-dependency), `vba_guard.py` (dialog / hang guard), `vba_diagnose.py` (read-only diagnosis: hidden window / references / `Attribute` lines / unqualified references; also scans a directory statically, no Excel needed), `vba_lint_refs.py` (static lint: every unqualified reference with file + line, reads GBK/UTF-8 sources), `bare_name_scope_probe.py` (reproduces which call styles fail on a hidden-window workbook), `scan_hidden_windows.py` (static scan of a folder/file for workbooks whose window is hidden on disk — reads `xl/workbook.xml`, no Excel needed), `dismiss_vba_dialog.py`, `vba_attr_probe.py`
 - 中文完整版：[references/zh-CN.md](references/zh-CN.md)
 - Use `/` path separators only, for cross-platform portability

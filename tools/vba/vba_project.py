@@ -758,83 +758,8 @@ def cmd_refs(args, w32, win32process):
     return 0
 
 
-# ---- 真编译检查：VBE 578 "Compile" 命令 + 弹窗捕捉 --------------------------
-# 要点：执行编译命令时若工程有语法错误，VBE 会弹**模态**对话框并阻塞 Execute()。
-# 所以必须一边执行、一边点掉弹窗（点掉后 Execute 才会返回），否则整个进程卡死。
 _BTN_TEXTS = ("确定", "OK", "结束", "End", "关闭", "Close")
 _BTN_IDS = (4800, 1, 2)
-
-
-def _dialog_watcher(stop, hits, pid):
-    import win32con
-    import win32gui
-    import win32process
-
-    while not stop["stop"]:
-        found = []
-        def cb(h, _):
-            try:
-                if not win32gui.IsWindowVisible(h):
-                    return True
-                if win32gui.GetClassName(h) != "#32770":
-                    return True
-                if pid:
-                    _, wp = win32process.GetWindowThreadProcessId(h)
-                    if wp != pid:
-                        return True
-                title = win32gui.GetWindowText(h)
-                if "Visual Basic" in title or "VBA" in title:
-                    found.append(h)
-            except Exception:
-                pass
-            return True
-        try:
-            win32gui.EnumWindows(cb, None)
-        except Exception:
-            pass
-
-        for h in found:
-            kids = []
-            def kcb(c, _):
-                try:
-                    kids.append((c, win32gui.GetDlgCtrlID(c),
-                                 win32gui.GetClassName(c), win32gui.GetWindowText(c)))
-                except Exception:
-                    pass
-                return True
-            try:
-                win32gui.EnumChildWindows(h, kcb, None)
-            except Exception:
-                pass
-            msg = next((t for _, i, cl, t in kids if i == 4803), "")
-            if not msg:
-                msg = next((t for _, i, cl, t in kids if cl == "Static" and len(t) > 8), "")
-            buttons = [(c, i, t) for c, i, cl, t in kids if cl == "Button"]
-            hits.append({"title": win32gui.GetWindowText(h), "text": msg,
-                         "buttons": [t for _, _, t in buttons]})
-            target = None
-            for c, i, t in buttons:                       # 先按文案（编译错误框是"确定"）
-                if t in _BTN_TEXTS or any(t.startswith(x) for x in _BTN_TEXTS):
-                    target = (c, i, t)
-                    break
-            if target is None:
-                for c, i, t in buttons:                   # 再按 id（运行期错误框 4800=结束）
-                    if i in _BTN_IDS:
-                        target = (c, i, t)
-                        break
-            if target is None and buttons:
-                target = buttons[0]
-            if target:
-                c, i, t = target
-                try:
-                    win32gui.PostMessage(c, win32con.BM_CLICK, 0, 0)
-                except Exception:
-                    try:
-                        win32gui.PostMessage(h, win32con.WM_COMMAND, i, c)
-                    except Exception:
-                        pass
-                hits[-1]["clicked"] = t
-        time.sleep(0.1)
 
 
 # ---- 真编译检查：注入空探针宏 + Run 触发 VBE 的工程级编译 -------------------

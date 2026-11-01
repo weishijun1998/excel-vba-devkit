@@ -21,6 +21,16 @@ fails = []
 oks = []
 
 
+def _setup_stdio():
+    """强制 stdout/stderr 为 UTF-8：Windows 上默认按 locale 编码（cp936）写，
+    中文与 ✗ 在 UTF-8 终端里是乱码，重定向到管道时还可能直接抛 UnicodeEncodeError。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def check_python(paths):
     for p in paths:
         try:
@@ -163,6 +173,7 @@ def check_prose():
 
 
 def main():
+    _setup_stdio()
     py_files = []
     for root, dirs, files in os.walk(os.path.join(ROOT, "tools")):
         dirs[:] = [d for d in dirs if d != "__pycache__"]
